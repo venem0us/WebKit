@@ -50,7 +50,10 @@
 #include "NotImplemented.h"
 #include "VideoTrackPrivateGStreamer.h"
 #include "WebKitMediaSourceGStreamer.h"
+#include <wtf/HashMap.h>
 #include <wtf/NativePromise.h>
+#include <wtf/NeverDestroyed.h>
+#include <wtf/text/StringHash.h>
 #include <wtf/text/StringToIntegerConversion.h>
 
 GST_DEBUG_CATEGORY_STATIC(webkit_mse_sourcebuffer_debug);
@@ -96,10 +99,95 @@ SourceBufferPrivateGStreamer::~SourceBufferPrivateGStreamer()
     m_appendPromise.reset();
 }
 
+#if OS(WINDOWS)
+// Where data begins, in ISO BMFF terms: with an initialization segment (a moov box, after any ftyp/free/skip/uuid),
+// with a media segment (moof, styp, sidx, emsg, prft or mdat first), or neither (too short, or not ISO BMFF).
+enum class IsoDataStart : uint8_t { Initialization, Media, Unknown };
+
+static IsoDataStart isoDataStart(std::span<const uint8_t> data, size_t& initializationSegmentEnd)
+{
+    auto read32 = [&](size_t offset) -> uint64_t {
+        return (uint64_t { data[offset] } << 24) | (uint64_t { data[offset + 1] } << 16) | (uint64_t { data[offset + 2] } << 8) | data[offset + 3];
+    };
+    size_t offset = 0;
+    while (offset + 8 <= data.size()) {
+        uint64_t size = read32(offset);
+        auto type = data.subspan(offset + 4, 4);
+        auto is = [&](const char name[5]) { return type[0] == name[0] && type[1] == name[1] && type[2] == name[2] && type[3] == name[3]; };
+        if (size == 1) {
+            if (offset + 16 > data.size())
+                return IsoDataStart::Unknown;
+            size = (read32(offset + 8) << 32) | read32(offset + 12);
+        } else if (!size)
+            size = data.size() - offset;
+        if (size < 8)
+            return IsoDataStart::Unknown;
+        if (is("moov")) {
+            if (offset + size > data.size())
+                return IsoDataStart::Unknown;
+            initializationSegmentEnd = offset + size;
+            return IsoDataStart::Initialization;
+        }
+        if (is("moof") || is("styp") || is("sidx") || is("emsg") || is("prft") || is("mdat"))
+            return IsoDataStart::Media;
+        if (!is("ftyp") && !is("free") && !is("skip") && !is("uuid") && !is("pdin"))
+            return IsoDataStart::Unknown;
+        offset += size;
+    }
+    return IsoDataStart::Unknown;
+}
+
+// The initialization segment last appended for each content type (codecs included), in this web process.
+static HashMap<String, Ref<SharedBuffer>>& lastInitializationSegments()
+{
+    static NeverDestroyed<HashMap<String, Ref<SharedBuffer>>> segments;
+    return segments;
+}
+
+// A SourceBuffer whose first data is a media segment, with no initialization segment ever appended to it, can't be
+// parsed: the demuxer looks for a moov box and fails after 10 MB ("no 'moov' atom"), and the player stays black.
+// Twitch's player does this when it replaces its MediaSource after a stall: the new SourceBuffer only gets media
+// segments. Such data gets the initialization segment last appended for the same content type in front of it; the
+// spec says media segments need one before them, and this one comes from the same page's same stream.
+Ref<SharedBuffer> SourceBufferPrivateGStreamer::withInitializationSegmentIfMissing(Ref<SharedBuffer>&& data)
+{
+    if (!m_type.containerType().endsWith("mp4"_s))
+        return WTF::move(data);
+    size_t initializationSegmentEnd = 0;
+    switch (isoDataStart(data->span(), initializationSegmentEnd)) {
+    case IsoDataStart::Initialization:
+        m_hasSeenInitializationSegment = true;
+        lastInitializationSegments().set(m_type.raw(), SharedBuffer::create(data->span().first(initializationSegmentEnd)));
+        return WTF::move(data);
+    case IsoDataStart::Media: {
+        if (m_hasSeenInitializationSegment)
+            return WTF::move(data);
+        auto it = lastInitializationSegments().find(m_type.raw());
+        if (it == lastInitializationSegments().end())
+            return WTF::move(data);
+        GST_WARNING("Media data without an initialization segment for %s: reusing the %zu-byte one last appended for this type",
+            m_type.raw().utf8().data(), it->value->size());
+        m_hasSeenInitializationSegment = true;
+        Vector<uint8_t> combined;
+        combined.reserveInitialCapacity(it->value->size() + data->size());
+        combined.append(it->value->span());
+        combined.append(data->span());
+        return SharedBuffer::create(WTF::move(combined));
+    }
+    case IsoDataStart::Unknown:
+        return WTF::move(data);
+    }
+    return WTF::move(data);
+}
+#endif
+
 Ref<MediaPromise> SourceBufferPrivateGStreamer::appendInternal(Ref<SharedBuffer>&& data)
 {
     ASSERT(isMainThread());
 
+#if OS(WINDOWS)
+    data = withInitializationSegmentIfMissing(WTF::move(data));
+#endif
     if (RefPtr player = this->player())
         GST_DEBUG_OBJECT(player->pipeline(), "Appending %zu bytes", data->size());
 
@@ -168,6 +256,10 @@ void SourceBufferPrivateGStreamer::startChangingType()
 
     m_appendPipeline->startChangingType();
     m_pendingInitializationSegmentForChangeType = true;
+#if OS(WINDOWS)
+    // m_type still names the old type: don't put that type's initialization segment in front of the new type's data.
+    m_hasSeenInitializationSegment = true;
+#endif
 }
 
 void SourceBufferPrivateGStreamer::flush(TrackID trackId)
