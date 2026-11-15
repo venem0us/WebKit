@@ -21,6 +21,7 @@
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
+#include <ctime>
 #include <process.h>
 #include <string>
 #include <wtf/MonotonicTime.h>
@@ -154,7 +155,14 @@ private:
                 auto* temp = std::getenv("TEMP");
                 directory = temp ? std::string(temp) + "\\" : std::string();
             }
-            auto path = directory + "rendering-stats-" + std::to_string(_getpid()) + ".log";
+            // Named after the process's start as well as its id (as the video stats are): Windows reuses process ids, and
+            // appending to an older process's log mixed two sessions in one file.
+            std::time_t startTime = std::time(nullptr);
+            std::tm local { };
+            localtime_s(&local, &startTime);
+            char stamp[32];
+            std::strftime(stamp, sizeof(stamp), "%Y%m%d-%H%M%S", &local);
+            auto path = directory + "rendering-stats-" + stamp + "-" + std::to_string(_getpid()) + ".log";
             return std::fopen(path.c_str(), "a");
         }();
         return file;
