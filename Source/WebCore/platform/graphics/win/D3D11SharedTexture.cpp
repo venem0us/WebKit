@@ -186,6 +186,30 @@ static std::atomic<bool> trimPending;
 static std::atomic<uint64_t> releaseFlushes;
 static std::atomic<uint64_t> watchFlushes;
 static std::atomic<uint64_t> trims;
+static std::atomic<uint64_t> idlePurges;
+
+static void purgeIdleThreads();
+
+// Threads other than ANGLE's callers reach the device's one immediate context: the compositor's video textures (their
+// keyed mutexes) while a drawing thread is inside ANGLE, and the flushes and trims here. ANGLE serialises only its own
+// calls, so have Direct3D lock every immediate-context call too.
+static void protectDevice(ID3D11Device* device)
+{
+    static std::once_flag protectOnce;
+    std::call_once(protectOnce, [device] {
+        Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
+        device->GetImmediateContext(&context);
+        Microsoft::WRL::ComPtr<ID3D11Multithread> multithread;
+        if (context && SUCCEEDED(context.As(&multithread))) {
+            multithread->SetMultithreadProtected(TRUE);
+            deviceProtected = true;
+        }
+    });
+}
+
+// The device the watch thread watches (it keeps a reference for the life of the process): for flushes made with no
+// context current, after a page's window context has gone.
+static std::atomic<ID3D11Device*> watchedDevice;
 
 static void flushDevice(ID3D11Device* device, bool mayTrim)
 {
@@ -212,8 +236,12 @@ static void flushDevice(ID3D11Device* device, bool mayTrim)
 
 void flushReleasedTextures()
 {
+    // Every caller has just released something, though not always one of GPU drawing's textures (a page's compositor
+    // scene and window surface, at the page's end): flush either way, and let the watch thread trim once it's quiet.
+    texturesReleased = true;
     EGLDisplay display = eglGetCurrentDisplay();
-    if (auto* device = display != EGL_NO_DISPLAY ? angleDevice(display) : nullptr)
+    auto* device = display != EGL_NO_DISPLAY ? angleDevice(display) : watchedDevice.load();
+    if (device)
         flushDevice(device, false);
 }
 
@@ -232,6 +260,12 @@ void watchCurrentDevice(void (*check)(long reason))
         Microsoft::WRL::ComPtr<ID3D11Device> device = display != EGL_NO_DISPLAY ? angleDevice(display) : nullptr;
         if (!device)
             return;
+        // Also with GPU drawing off: closing a page releases its compositor's textures and window surface, which
+        // Direct3D destroys only at the next flush; with nothing composited left on screen there was none, and the GPU
+        // process kept every closed page's memory (1.19.69 on the GPU PC, GPU drawing off: 643 MB with 8 tabs, 672 MB
+        // after closing all but a blank one).
+        protectDevice(device.Get());
+        watchedDevice = device.Get();
         Thread::create("D3D11 device watch"_s, [device = WTF::move(device), check] {
             while (true) {
                 std::this_thread::sleep_for(std::chrono::seconds(1));
@@ -241,6 +275,7 @@ void watchCurrentDevice(void (*check)(long reason))
                         Locker locker { registryLock };
                         forgetStaleTextures();
                     }
+                    purgeIdleThreads();
                     flushDevice(device.Get(), true);
                 }
             }
@@ -283,6 +318,20 @@ static std::atomic<int64_t> skiaCacheBytes;
 static thread_local int64_t threadSkiaCacheBytes;
 // Whether this thread has made a buffer (and so has a Skia context, maybe a pool): see releaseThreadResources.
 static thread_local bool threadMadeBuffers;
+
+// The drawing threads that can be asked to purge when idle (see setThreadDispatcher and purgeIdleThreads).
+struct DrawingThread {
+    Function<void(Function<void()>&&)> dispatch;
+    int64_t lastBufferMs { 0 };
+    bool purged { true };
+};
+static Lock drawingThreadsLock;
+static HashMap<uintptr_t, DrawingThread>& drawingThreads() WTF_REQUIRES_LOCK(drawingThreadsLock)
+{
+    static NeverDestroyed<HashMap<uintptr_t, DrawingThread>> map;
+    return map;
+}
+static uintptr_t currentThreadKey() { return reinterpret_cast<uintptr_t>(&Thread::currentSingleton()); }
 
 static uint64_t bytesForSize(IntSize size)
 {
@@ -522,23 +571,18 @@ std::unique_ptr<ImageBufferBackend> createSkiaBackend(const ImageBufferParameter
     auto* device = angleDevice(display);
     if (!device)
         return fail("no D3D11 device from ANGLE");
-    // With drawing on the GPU, threads other than ANGLE's callers reach the device's one immediate context: the
-    // compositor's video textures (their keyed mutexes) while a drawing thread is inside ANGLE. ANGLE serialises only
-    // its own calls, so have Direct3D lock every immediate-context call too.
-    static std::once_flag protectOnce;
-    std::call_once(protectOnce, [device] {
-        Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
-        device->GetImmediateContext(&context);
-        Microsoft::WRL::ComPtr<ID3D11Multithread> multithread;
-        if (context && SUCCEEDED(context.As(&multithread))) {
-            multithread->SetMultithreadProtected(TRUE);
-            deviceProtected = true;
-        }
-    });
+    protectDevice(device);
     if (isSoftwareAdapter(device))
         return fail("software adapter (WARP); GLASS_GPU_RASTER_ALLOW_WARP=1 to use it anyway");
     threadMadeBuffers = true;
     noteActivity();
+    {
+        Locker locker { drawingThreadsLock };
+        if (auto it = drawingThreads().find(currentThreadKey()); it != drawingThreads().end()) {
+            it->value.lastBufferMs = nowMs();
+            it->value.purged = false;
+        }
+    }
 
     auto& pool = texturePool();
     std::optional<WrappedTexture> reused;
@@ -707,11 +751,64 @@ MemoryUse takeMemoryUse()
     uint64_t current = textureBytes;
     return { current, std::max(peakTextureBytes.exchange(current), current), knownBudget, liveImages,
         static_cast<uint64_t>(std::max<int64_t>(pooledBytes, 0)), static_cast<uint64_t>(std::max<int64_t>(skiaCacheBytes, 0)),
-        releaseFlushes.exchange(0), watchFlushes.exchange(0), trims.exchange(0) };
+        releaseFlushes.exchange(0), watchFlushes.exchange(0), trims.exchange(0), idlePurges.exchange(0) };
+}
+
+void setThreadDispatcher(Function<void(Function<void()>&&)>&& dispatch)
+{
+    Locker locker { drawingThreadsLock };
+    drawingThreads().set(currentThreadKey(), DrawingThread { WTF::move(dispatch) });
+}
+
+// On a drawing thread that has drawn nothing for a while: its pooled textures and everything in its Skia context's
+// cache that nothing holds (scratch textures, gradients, path masks; Skia's limit for the cache is 256 MB per context on
+// a PC with 4 GB of memory or more, and each web process's rendering backend draws on its own thread with its own
+// context). Up to a quarter of a gigabyte each stayed for as long as the page lived: with GPU drawing on, the GPU
+// process held about 550 MB more than with it off, with eight tabs open (1.19.69 on the GPU PC). They are made again,
+// as needed, when the page next draws.
+static void purgeThreadCaches()
+{
+    if (!threadMadeBuffers)
+        return;
+    auto& display = PlatformDisplay::sharedDisplay();
+    auto* glContext = display.skiaGLContext();
+    if (!glContext || !glContext->makeContextCurrent())
+        return;
+    texturePool().destroyAll();
+    if (auto* grContext = display.skiaGrContext()) {
+        grContext->resetContext(kTextureBinding_GrGLBackendState);
+        grContext->purgeUnlockedResources(GrPurgeResourceOptions::kAllResources);
+        size_t cacheBytes = 0;
+        grContext->getResourceCacheUsage(nullptr, &cacheBytes);
+        skiaCacheBytes += static_cast<int64_t>(cacheBytes) - std::exchange(threadSkiaCacheBytes, static_cast<int64_t>(cacheBytes));
+    }
+    ++idlePurges;
+    // Destroyed at the next flush; the watch thread then trims, the device having been quiet (no noteActivity here).
+    texturesReleased = true;
+    flushReleasedTextures();
+}
+
+// From the device watch thread: each drawing thread that made no buffer for 5 s since it last made one purges once.
+static void purgeIdleThreads()
+{
+    auto now = nowMs();
+    Locker locker { drawingThreadsLock };
+    for (auto& thread : drawingThreads().values()) {
+        if (thread.purged || now - thread.lastBufferMs < 5000)
+            continue;
+        thread.purged = true;
+        thread.dispatch([] {
+            purgeThreadCaches();
+        });
+    }
 }
 
 void releaseThreadResources()
 {
+    {
+        Locker locker { drawingThreadsLock };
+        drawingThreads().remove(currentThreadKey());
+    }
     if (!threadMadeBuffers)
         return;
     threadMadeBuffers = false;

@@ -31,6 +31,7 @@
 #include "GLContext.h"
 #if PLATFORM(WIN)
 #include "D3D11SharedTexture.h"
+#include <cstdlib>
 #include <wtf/MonotonicTime.h>
 #endif
 
@@ -281,6 +282,20 @@ static std::optional<size_t> glyphCacheTextureMaximumBytes()
 
 static size_t initializeMaxResourceCacheBytes(GrDirectContext* grContext)
 {
+#if PLATFORM(WIN)
+    // Glass: GLASS_SKIA_CACHE_MB sets the limit (comparisons). Not lower by default: a page's canvases count against it
+    // while they live, so on a page of large canvases a 64 MB limit was always exceeded and Skia threw away its scratch
+    // resources every frame (MotionMark-like page of 40 canvases 29% slower on the GPU PC, 1.19.70 candidate). What made
+    // the difference to memory is that idle drawing threads empty their caches (D3D11SharedTextures::purgeIdleThreads).
+    static const size_t overrideLimit = [] {
+        const char* value = std::getenv("GLASS_SKIA_CACHE_MB");
+        return value && *value ? static_cast<size_t>(std::atoi(value)) * MB : 0;
+    }();
+    if (overrideLimit) {
+        grContext->setResourceCacheLimit(overrideLimit);
+        return grContext->getResourceCacheLimit();
+    }
+#endif
     size_t memorySize = WTF::ramSize();
     if (memorySize < s_lowEndDeviceMemoryThresholdBytes)
         grContext->setResourceCacheLimit(s_lowEndMaxResourceCacheBytes);
