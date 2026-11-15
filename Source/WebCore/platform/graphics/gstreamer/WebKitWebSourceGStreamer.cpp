@@ -110,6 +110,7 @@ struct WebKitWebSrcPrivate {
 
         // Properties used for GStreamer data-flow in create().
         bool isFlushing { false };
+    bool isFlushingOnlyForNonFlushingSeek { false }; // set with isFlushing by webKitWebSrcEvent(), cleared by unlock
         Condition responseCondition; // Must be signaled after any updates on HTTP requests, and when flushing.
         GRefPtr<GstAdapter> adapter;
         bool isDurationSet { false };
@@ -816,9 +817,23 @@ static gboolean webKitWebSrcEvent(GstBaseSrc* baseSrc, GstEvent* event)
             auto src = WEBKIT_WEB_SRC(baseSrc);
             GST_DEBUG_OBJECT(src, "Non-flushing seek requested, unlocking streaming thread that might be expecting a response.");
 
+            {
+                DataMutexLocker members { src->priv->dataMutex };
+                members->isFlushing = true;
+                members->isFlushingOnlyForNonFlushingSeek = true;
+                members->responseCondition.notifyOne();
+            }
+            // basesrc handles the seek now, synchronously. Without a flush, no unlock_stop follows to clear isFlushing,
+            // and when basesrc refuses the seek (a looping video's TIME segment seek) DoSeek isn't called either. Left set,
+            // the next create() that had to wait for data returned FLUSHING and basesrc paused its task for good: the video
+            // froze once the data read ahead ran out, 15 s into a 20 s looping file. Clear it, unless an unlock came meanwhile.
+            gboolean result = GST_BASE_SRC_CLASS(webkit_web_src_parent_class)->event(baseSrc, event);
             DataMutexLocker members { src->priv->dataMutex };
-            members->isFlushing = true;
-            members->responseCondition.notifyOne();
+            if (members->isFlushingOnlyForNonFlushingSeek) {
+                members->isFlushingOnlyForNonFlushingSeek = false;
+                members->isFlushing = false;
+            }
+            return result;
         }
         break;
     }
@@ -835,6 +850,7 @@ static gboolean webKitWebSrcUnLock(GstBaseSrc* baseSrc)
 
     GST_DEBUG_OBJECT(src, "Unlock");
     members->isFlushing = true;
+    members->isFlushingOnlyForNonFlushingSeek = false;
 
     // If we have a network resource request open, we ask the main thread to close it.
     if (members->resource) {
