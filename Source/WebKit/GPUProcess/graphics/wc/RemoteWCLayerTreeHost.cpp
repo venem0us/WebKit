@@ -38,6 +38,9 @@
 #include "WCUpdateInfo.h"
 #include <WebCore/ProcessIdentifier.h>
 #include <wtf/TZoneMallocInlines.h>
+#if OS(WINDOWS)
+#include <windows.h>
+#endif
 
 namespace WebKit {
 
@@ -67,6 +70,10 @@ RemoteWCLayerTreeHost::RemoteWCLayerTreeHost(GPUConnectionToWebProcess& connecti
 {
     m_connectionToWebProcess->messageReceiverMap().addMessageReceiver(Messages::RemoteWCLayerTreeHost::messageReceiverName(), m_identifier.toUInt64(), *this);
     m_scene = makeUnique<WCScene>(m_webProcessIdentifier, usesOffscreenRendering);
+#if OS(WINDOWS)
+    m_nativeWindow = nativeWindow;
+    m_shownPresents->host = this;
+#endif
 
     remoteGraphicsStreamWorkQueue().dispatch([scene = m_scene.get(), sceneContextHolder = m_sharedSceneContextHolder.get(), nativeWindow] {
         if (!sceneContextHolder->context)
@@ -78,6 +85,9 @@ RemoteWCLayerTreeHost::RemoteWCLayerTreeHost(GPUConnectionToWebProcess& connecti
 RemoteWCLayerTreeHost::~RemoteWCLayerTreeHost()
 {
     ASSERT(m_connectionToWebProcess);
+#if OS(WINDOWS)
+    m_shownPresents->host = nullptr;
+#endif
     m_connectionToWebProcess->messageReceiverMap().removeMessageReceiver(Messages::RemoteWCLayerTreeHost::messageReceiverName(), m_identifier.toUInt64());
     auto sceneContextHolder = m_connectionToWebProcess->gpuProcess().sharedSceneContext().removeHolder(m_sharedSceneContextHolder.releaseNonNull());
 
@@ -100,6 +110,20 @@ uint64_t RemoteWCLayerTreeHost::messageSenderDestinationID() const
 
 void RemoteWCLayerTreeHost::update(WCUpdateInfo&& update, CompletionHandler<void(std::optional<WebKit::UpdateInfo>)>&& completionHandler)
 {
+#if OS(WINDOWS)
+    // ANGLE presents into the page's window with a blt-model swap chain: the frame is copied into the browser window's
+    // surface, which the browser (another process) redraws right after showing a page (a tab switch, a split pane). A
+    // frame presented just before can be painted over, and a page that doesn't change presents nothing more: it stayed
+    // blank until clicked. So after an update sent while the window was hidden or just shown, or the first after a quiet
+    // spell (a page shown again may have sent nothing while hidden), present again a little later, once the browser has
+    // drawn.
+    bool visible = IsWindowVisible(reinterpret_cast<HWND>(m_nativeWindow));
+    auto now = MonotonicTime::now();
+    if (!visible || !m_windowWasVisible || now - m_lastUpdateTime > 250_ms)
+        scheduleShownPresents();
+    m_windowWasVisible = visible;
+    m_lastUpdateTime = now;
+#endif
     remoteGraphicsStreamWorkQueue().dispatch([scene = m_scene.get(), update = WTF::move(update), completionHandler = WTF::move(completionHandler)]() mutable {
         auto updateInfo = scene->update(WTF::move(update));
         RunLoop::mainSingleton().dispatch([updateInfo = WTF::move(updateInfo), completionHandler = WTF::move(completionHandler)]() mutable {
@@ -174,6 +198,31 @@ void RemoteWCLayerTreeHost::scheduleVideoFrameDrain()
         if (painted)
             scene->present();
     });
+}
+
+void RemoteWCLayerTreeHost::scheduleShownPresents()
+{
+    // GLASS_NO_SHOWN_PRESENTS=1 turns these off (comparison, rollback).
+    static const bool disabled = [] {
+        const char* value = std::getenv("GLASS_NO_SHOWN_PRESENTS");
+        return value && !std::strcmp(value, "1");
+    }();
+    if (disabled || m_shownPresents->scheduled)
+        return;
+    m_shownPresents->scheduled = true;
+    for (auto delay : { 50_ms, 250_ms, 1_s }) {
+        RunLoop::mainSingleton().dispatchAfter(delay, [state = m_shownPresents, last = delay == 1_s] {
+            if (last)
+                state->scheduled = false;
+            auto* host = state->host;
+            if (!host || !host->m_scene || !IsWindowVisible(reinterpret_cast<HWND>(host->m_nativeWindow)))
+                return;
+            // Queued ahead of the task that destroys the scene, like the video frames.
+            remoteGraphicsStreamWorkQueue().dispatch([scene = host->m_scene.get()] {
+                scene->presentAgain();
+            });
+        });
+    }
 }
 #endif
 

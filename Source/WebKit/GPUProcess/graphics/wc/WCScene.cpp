@@ -635,6 +635,14 @@ bool WCScene::repaintForVideo()
 }
 #endif
 
+#if OS(WINDOWS)
+void WCScene::presentAgain()
+{
+    if (repaintForVideo())
+        present();
+}
+#endif
+
 void WCScene::present()
 {
     if (!m_needsPresent)
