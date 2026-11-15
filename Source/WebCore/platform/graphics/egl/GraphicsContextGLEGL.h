@@ -52,7 +52,7 @@ public:
     bool copyTextureFromVideoFrame(VideoFrame&, PlatformGLObject texture, GCGLenum target, GCGLint level, GCGLenum internalFormat, GCGLenum type, bool unpackFlipY, bool unpackPremultiplyAlpha) final;
 #endif
 #if ENABLE(MEDIA_STREAM) || ENABLE(WEB_CODECS)
-    RefPtr<VideoFrame> surfaceBufferToVideoFrame(SurfaceBuffer) final;
+    WEBCORE_EXPORT RefPtr<VideoFrame> surfaceBufferToVideoFrame(SurfaceBuffer) final;
 #endif
 
 #if !USE(COORDINATED_GRAPHICS)

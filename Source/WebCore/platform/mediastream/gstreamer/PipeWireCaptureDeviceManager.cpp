@@ -26,7 +26,9 @@
 #include "GStreamerVideoCaptureSource.h"
 #include "MockRealtimeMediaSourceCenter.h"
 #include <errno.h>
+#if !OS(WINDOWS)
 #include <unistd.h>
+#endif
 #include <wtf/Scope.h>
 
 namespace WebCore {

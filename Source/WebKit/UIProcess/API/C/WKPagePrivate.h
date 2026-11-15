@@ -147,6 +147,9 @@ WK_EXPORT void WKPageSetMuted(WKPageRef page, WKMediaMutedState muted);
 WK_EXPORT void WKPageClearUserMediaState(WKPageRef page);
 WK_EXPORT void WKPageSetMediaCaptureEnabled(WKPageRef page, bool enabled);
 WK_EXPORT bool WKPageGetMediaCaptureEnabled(WKPageRef page);
+// Glass (M1): stops this page's camera and microphone capture and forgets its granted access (the page may ask again);
+// WKPageSetMediaCaptureEnabled is process-wide and would stop every page.
+WK_EXPORT void WKPageStopMediaCapture(WKPageRef page);
 
 enum {
     kWKMediaIsNotPlaying = 0,

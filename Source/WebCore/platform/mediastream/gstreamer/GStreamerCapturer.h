@@ -46,6 +46,8 @@ public:
     virtual void sourceCapsChanged(const GstCaps*) { }
     virtual void captureEnded() { }
     virtual void captureDeviceUpdated(const GStreamerCaptureDevice&) { }
+    // Glass M4d: the capture pipeline posted an error (e.g. Windows gave the camera to another capture).
+    virtual void capturePipelineFailed() { }
 };
 
 class GStreamerCapturer : public ThreadSafeRefCountedAndCanMakeThreadSafeWeakPtr<GStreamerCapturer> {

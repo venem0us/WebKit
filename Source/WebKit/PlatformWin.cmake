@@ -219,3 +219,30 @@ if (USE_GSTREAMER)
     )
 endif ()
 
+# Glass M0: same capture wiring as PlatformGTK.cmake.
+if (ENABLE_MEDIA_STREAM)
+    list(APPEND WebKit_SOURCES
+        UIProcess/glib/UserMediaPermissionRequestManagerProxyGLib.cpp
+
+        WebProcess/glib/UserMediaCaptureManager.cpp
+    )
+    list(APPEND WebKit_MESSAGES_IN_FILES
+        WebProcess/glib/UserMediaCaptureManager
+    )
+    list(APPEND WebKit_PRIVATE_INCLUDE_DIRECTORIES
+        "${WEBKIT_DIR}/WebProcess/glib"
+    )
+endif ()
+
+# Glass M0: network-process side of WebRTC, as in SourcesGTK.txt.
+if (USE_LIBWEBRTC)
+    list(APPEND WebKit_SOURCES
+        NetworkProcess/glib/NetworkMDNSRegisterGLib.cpp
+
+        NetworkProcess/webrtc/LibWebRTCSocketClient.cpp
+        NetworkProcess/webrtc/NetworkRTCMonitor.cpp
+        NetworkProcess/webrtc/NetworkRTCProvider.cpp
+        NetworkProcess/webrtc/NetworkRTCSharedMonitor.cpp
+    )
+endif ()
+

@@ -408,7 +408,8 @@ WebProcess::WebProcess()
     addSupplement<WebMediaKeyStorageManager>();
 #endif
 
-#if PLATFORM(COCOA) && ENABLE(MEDIA_STREAM)
+// Glass (M1): Windows with GStreamer uses the GLib capture manager, which GTK/WPE register in WebProcessGLib.cpp (not built here).
+#if (PLATFORM(COCOA) || (PLATFORM(WIN) && USE(GLIB))) && ENABLE(MEDIA_STREAM)
     addSupplementWithoutRefCountedCheck<UserMediaCaptureManager>();
 #endif
 

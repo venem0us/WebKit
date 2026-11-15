@@ -99,6 +99,15 @@ void ProcessLauncher::launchProcess()
     startupInfo.cb = sizeof(startupInfo);
     startupInfo.dwFlags = STARTF_USESHOWWINDOW;
     startupInfo.wShowWindow = SW_HIDE;
+    // Glass: when the browser itself was started with stdout/stderr redirected (diagnostics), hand the same handles
+    // to the helper processes so their logs land there too. A normal launch has none, and nothing changes.
+    HANDLE parentError = ::GetStdHandle(STD_ERROR_HANDLE);
+    if (parentError && parentError != INVALID_HANDLE_VALUE) {
+        startupInfo.dwFlags |= STARTF_USESTDHANDLES;
+        startupInfo.hStdInput = ::GetStdHandle(STD_INPUT_HANDLE);
+        startupInfo.hStdOutput = ::GetStdHandle(STD_OUTPUT_HANDLE);
+        startupInfo.hStdError = parentError;
+    }
     PROCESS_INFORMATION processInformation { };
     BOOL result = ::CreateProcess(0, commandLine.mutableSpan().data(), 0, 0, true, 0, 0, 0, &startupInfo, &processInformation);
 
