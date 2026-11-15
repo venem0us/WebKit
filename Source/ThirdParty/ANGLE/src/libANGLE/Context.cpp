@@ -18,6 +18,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include <atomic>
 #include <iterator>
 #include <sstream>
 #include <vector>
@@ -70,6 +71,13 @@
 
 namespace gl
 {
+static std::atomic<uint64_t> gMakeCurrentCount{0};
+
+uint64_t GetMakeCurrentCount()
+{
+    return gMakeCurrentCount.load(std::memory_order_relaxed);
+}
+
 namespace
 {
 constexpr state::DirtyObjects kDrawDirtyObjectsBase{
@@ -1117,6 +1125,7 @@ egl::Error Context::makeCurrent(egl::ThreadSafeDisplay *display,
 
     // Notify the renderer of a context switch.
     angle::Result implResult = mImplementation->onMakeCurrent(this);
+    gMakeCurrentCount.fetch_add(1, std::memory_order_relaxed);
 
     // If the implementation fails onMakeCurrent, unset the default framebuffer.
     if (implResult != angle::Result::Continue)

@@ -176,6 +176,7 @@ if (USE_ANGLE_EGL OR ENABLE_WEBGL)
         LIBANGLE_IMPLEMENTATION
     )
     target_compile_definitions(ANGLE PUBLIC ${ANGLE_DEFINITIONS})
+    target_compile_definitions(ANGLE PRIVATE ${ANGLE_PRIVATE_DEFINITIONS})
     target_link_libraries(ANGLE PRIVATE ZLIB::ZLIB ${CMAKE_DL_LIBS})
     if (ENABLE_WEBGL_WEBGPU)
         # The default proc table of the wgpu backend (DawnNativeWebGPUFramework.cpp) is the one of WebGPU.framework.
@@ -192,6 +193,7 @@ if (USE_ANGLE_EGL OR ENABLE_WEBGL)
     target_compile_definitions(GLESv2 PRIVATE
         ${_angle_prototypes}
         LIBGLESV2_IMPLEMENTATION
+        ${ANGLE_PRIVATE_DEFINITIONS}
     )
 
     target_link_libraries(GLESv2 PRIVATE ${ANGLEGLESv2_LIBRARIES} ${CMAKE_DL_LIBS})
@@ -217,6 +219,7 @@ if (USE_ANGLE_EGL OR ENABLE_WEBGL)
         target_include_directories(EGL PRIVATE ${ANGLE_PRIVATE_INCLUDE_DIRECTORIES})
         target_compile_definitions(EGL PRIVATE
             ${ANGLE_DEFINITIONS}
+            ${ANGLE_PRIVATE_DEFINITIONS}
             ${gl_prototypes}
             ${_angle_egl_api_definition}
         )

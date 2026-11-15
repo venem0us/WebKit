@@ -41,6 +41,9 @@ extern thread_local Thread *gCurrentThread;
 
 gl::Context *GetGlobalLastContext();
 void SetGlobalLastContext(gl::Context *context);
+// Glass: gl::GetMakeCurrentCount() when the last context was synced (see DirtyContextIfNeeded).
+uint64_t GetGlobalLastMakeCurrentCount();
+void SetGlobalLastMakeCurrentCount(uint64_t count);
 Thread *GetCurrentThread();
 Debug *GetDebug();
 
@@ -96,7 +99,17 @@ ANGLE_INLINE ScopedContextMutexLock LockAndTryMergeContextMutexes(gl::Context *c
     return lock;
 }
 
-#if !defined(ANGLE_ENABLE_CONTEXT_MUTEX)
+#if !defined(ANGLE_ENABLE_CONTEXT_MUTEX) && defined(ANGLE_ENABLE_SHARE_CONTEXT_LOCK) && \
+    defined(ANGLE_FORCE_CONTEXT_CHECK_EVERY_CALL)
+// Glass: GL calls take the global lock, but EGL calls took only the display's, so eglMakeCurrent on one thread reset the
+// D3D11 backend's shared state cache (StateManager11::onMakeCurrent) in the middle of another thread's draw. EGL calls
+// take the global lock too (recursive: ANGLE_ENABLE_GLOBAL_MUTEX_RECURSION), after the display's, which GL calls never
+// take while holding it.
+#    define ANGLE_EGL_SCOPED_CONTEXT_LOCK(EP, THREAD, ...) \
+        egl::ScopedGlobalEGLMutexLock shareContextLock
+#    define ANGLE_EGL_SCOPED_CONTEXT_LOCK_DPY(EP, THREAD, DPY, ...) \
+        egl::ScopedGlobalEGLMutexLock shareContextLock
+#elif !defined(ANGLE_ENABLE_CONTEXT_MUTEX)
 #    define ANGLE_EGL_SCOPED_CONTEXT_LOCK(EP, THREAD, ...)
 #    define ANGLE_EGL_SCOPED_CONTEXT_LOCK_DPY(EP, THREAD, DPY, ...)
 #else
@@ -161,12 +174,18 @@ void GenerateContextLostErrorOnCurrentGlobalContext(angle::EntryPoint entryPoint
 #if defined(ANGLE_FORCE_CONTEXT_CHECK_EVERY_CALL)
 // TODO(b/177574181): This should be handled in a backend-specific way.
 // if previous context different from current context, dirty all state
+// Glass: also when any context was made current since (gl::GetMakeCurrentCount): ANGLE makes contexts current
+// internally (Display::destroyContext), resetting the backend's shared state without changing the last context, and the
+// last context then drew with a cleared program (the 1.19.53 shutdown crash in StateManager11::updateState).
 static ANGLE_INLINE void DirtyContextIfNeeded(Context *context)
 {
-    if (context && context != egl::GetGlobalLastContext())
+    uint64_t makeCurrentCount = GetMakeCurrentCount();
+    if (context && (context != egl::GetGlobalLastContext() ||
+                    makeCurrentCount != egl::GetGlobalLastMakeCurrentCount()))
     {
         context->dirtyAllState();
         SetGlobalLastContext(context);
+        egl::SetGlobalLastMakeCurrentCount(makeCurrentCount);
     }
 }
 
