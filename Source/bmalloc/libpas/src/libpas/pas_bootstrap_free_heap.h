@@ -35,6 +35,14 @@ PAS_BEGIN_EXTERN_C;
 
 #define PAS_BOOTSTRAP_FREE_LIST_MINIMUM_SIZE 4u
 
+/* Glass: on Windows the bootstrap free heap's free memory may be reserved but not committed (see
+   pas_bootstrap_free_heap.c); pas_simple_large_free_heap commits what is allocated from it. */
+#if PAS_OS(WINDOWS)
+#define PAS_BOOTSTRAP_FREE_HEAP_COMMITS_LAZILY 1
+#else
+#define PAS_BOOTSTRAP_FREE_HEAP_COMMITS_LAZILY 0
+#endif
+
 #define PAS_SIMPLE_FREE_HEAP_NAME pas_bootstrap_free_heap
 #define PAS_SIMPLE_FREE_HEAP_ID(suffix) pas_bootstrap_free_heap ## suffix
 #include "pas_simple_free_heap_declarations.def"

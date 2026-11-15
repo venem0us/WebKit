@@ -44,6 +44,9 @@ struct pas_megapage_cache {
     pas_simple_large_free_heap free_heap;
     pas_heap_page_provider provider;
     void* provider_arg;
+    /* Glass: the range most recently committed for this cache's pages (Windows; see pas_megapage_cache.c). */
+    uintptr_t committed_begin;
+    uintptr_t committed_end;
 };
 
 struct pas_megapage_cache_config {

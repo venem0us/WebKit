@@ -33,7 +33,28 @@
 #include "pas_heap_lock.h"
 #include "pas_large_free_heap_config.h"
 #include "pas_enumerable_page_malloc.h"
+#include "pas_page_malloc.h"
 #include "pas_simple_free_heap_helpers.h"
+
+#if PAS_BOOTSTRAP_FREE_HEAP_COMMITS_LAZILY
+/* Glass: an aligned mapping (a 16 MB megapage aligned to 16 MB maps 32 MB) leaves padding that goes on the free list
+   for later allocations. On Windows pas_page_malloc commits all of it, and Windows charges committed memory to the
+   process whether it is touched or not, so that padding is decommitted here (it stays reserved) and
+   pas_simple_large_free_heap commits whatever is later allocated from this heap. */
+static void decommit_padding(void* padding, size_t size)
+{
+    uintptr_t begin;
+    uintptr_t end;
+
+    begin = pas_round_up_to_power_of_2((uintptr_t)padding, pas_page_malloc_alignment());
+    end = pas_round_down_to_power_of_2((uintptr_t)padding + size, pas_page_malloc_alignment());
+    if (end <= begin)
+        return;
+
+    pas_page_malloc_decommit_without_mprotect(
+        (void*)begin, end - begin, /* is_symmetric */ true, pas_page_flags_none);
+}
+#endif
 
 static pas_aligned_allocation_result bootstrap_source_allocate_aligned(size_t size,
                                                                        pas_alignment alignment,
@@ -46,6 +67,13 @@ static pas_aligned_allocation_result bootstrap_source_allocate_aligned(size_t si
         pas_log("bootstrap heap allocating %zu\n", size);
 
     pas_aligned_allocation_result retval = pas_enumerable_page_malloc_try_allocate_without_deallocating_padding(size, alignment, false);
+
+#if PAS_BOOTSTRAP_FREE_HEAP_COMMITS_LAZILY
+    if (retval.result) {
+        decommit_padding(retval.left_padding, retval.left_padding_size);
+        decommit_padding(retval.right_padding, retval.right_padding_size);
+    }
+#endif
 
     if (verbose)
         pas_log("bootstrap heap done allocating, returning %p.\n", retval.result);
