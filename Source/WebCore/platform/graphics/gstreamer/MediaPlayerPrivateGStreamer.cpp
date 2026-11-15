@@ -409,6 +409,9 @@ void MediaPlayerPrivateGStreamer::load(const String& urlString)
     ASSERT(m_pipeline);
     setPlaybinURL(url);
     setViewportVisibility(player->viewportVisibility());
+    // Suspend a muted, invisible video only now that the pipeline has its URI (see createGSTPlayBin()).
+    // setViewportVisibility() only does it when the visibility changed.
+    managePlayerSuspend();
 
     GST_DEBUG_OBJECT(pipeline(), "preload: %s", convertEnumerationToString(m_preload).utf8());
     if (m_preload == MediaPlayer::Preload::None && !isMediaSource()) {
@@ -3827,7 +3830,11 @@ void MediaPlayerPrivateGStreamer::createGSTPlayBin(const URL& url)
             g_object_set(m_pipeline.get(), "audio-filter", scale, nullptr);
     }
 
-    managePlayerSuspend();
+    // No managePlayerSuspend() here: load() calls it once the pipeline has its URI. Suspending a muted video that
+    // isn't in the viewport sets the pipeline to PAUSED, which uridecodebin3 refuses without a URI; that failed
+    // state change left playsink's target state at READY for good, so the new audio and video chains it later
+    // built stayed inactive and the first buffers failed ("Failed to push buffer"). Facebook's muted feed videos
+    // that start off-screen never played.
 #if ENABLE(MEDIA_TELEMETRY)
     MediaTelemetryReport::singleton().reportDrmInfo(getDrm());
     MediaTelemetryReport::singleton().reportPlaybackState(MediaTelemetryReport::AVPipelineState::Create);
