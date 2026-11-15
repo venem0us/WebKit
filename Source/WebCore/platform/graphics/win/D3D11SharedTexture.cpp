@@ -106,9 +106,20 @@ static HashSet<uint64_t>& read() WTF_REQUIRES_LOCK(registryLock)
     return set;
 }
 
+// Direct3D's immediate context is safe to flush from any thread only once it locks every call (set when GPU drawing
+// makes its first buffer); and textures were released since the last flush (see flushReleasedTextures).
+static std::atomic<bool> deviceProtected;
+static std::atomic<bool> texturesReleased;
+// When GPU drawing last made a buffer or released a texture (see flushDevice).
+static std::atomic<int64_t> lastActivityMs;
+static int64_t nowMs() { return static_cast<int64_t>(MonotonicTime::now().secondsSinceEpoch().milliseconds()); }
+static void noteActivity() { lastActivityMs = nowMs(); }
+
 // Forgetting a texture makes it free: its drawing thread may reuse it for a new buffer (see TexturePool).
 static void forget(uint64_t identifier) WTF_REQUIRES_LOCK(registryLock)
 {
+    texturesReleased = true;
+    noteActivity();
     registry().remove(identifier);
     releasedUnread().remove(identifier);
     read().remove(identifier);
@@ -141,6 +152,71 @@ static ID3D11Device* angleDevice(EGLDisplay display)
     return reinterpret_cast<ID3D11Device*>(d3dDevice);
 }
 
+// Direct3D 11 destroys a released resource only when the device's immediate context is next flushed. GPU drawing's
+// textures are mostly released while drawing goes on, which flushes anyway, but the last ones a page lets go of (a page
+// left or closed, its process ending) were followed by nothing: their memory stayed charged to the GPU process until it
+// ended (1.3 GB of video memory, and as much private memory, on the GPU PC after a page of 40 large canvases had gone;
+// 1.19.69 candidate). Called after a batch of textures was deleted, with a context of ANGLE's display current.
+// The device watch thread also flushes, each second, after textures were released, and lets go of tiles' textures the
+// compositor never read (forgetStaleTextures otherwise runs only when another texture is released, which an idle page
+// never does, and the registry keeps their textures alive).
+// Flushing alone gave little back: the driver keeps the memory of destroyed resources for the device (on the VM's
+// software Direct3D, 450 MB more than with GPU drawing off after a canvas page, and 30 MB less once trimmed). So once
+// GPU drawing has made and released nothing for a few seconds after a release, the watch thread also asks the driver to
+// give it back (IDXGIDevice3::Trim, as ANGLE does on UWP suspend; it changes no rendering state, and only the next
+// drawing pays for reallocating). Not while drawing goes on: tiles are released all the time while a page scrolls.
+// GLASS_GPU_RELEASE (testing, comparisons on the GPU PC): "none" as before 1.19.69 (no flush, sweep or trim), "flush"
+// without the trim.
+enum class ReleaseMode { None, Flush, Trim };
+static ReleaseMode releaseMode()
+{
+    static const ReleaseMode mode = [] {
+        const char* value = std::getenv("GLASS_GPU_RELEASE");
+        if (value && !std::strcmp(value, "none"))
+            return ReleaseMode::None;
+        if (value && !std::strcmp(value, "flush"))
+            return ReleaseMode::Flush;
+        return ReleaseMode::Trim;
+    }();
+    return mode;
+}
+
+static std::atomic<bool> trimPending;
+// For stats: flushes after releases (on the drawing and compositor threads, and the watch thread's), and trims.
+static std::atomic<uint64_t> releaseFlushes;
+static std::atomic<uint64_t> watchFlushes;
+static std::atomic<uint64_t> trims;
+
+static void flushDevice(ID3D11Device* device, bool mayTrim)
+{
+    if (releaseMode() == ReleaseMode::None || !deviceProtected)
+        return;
+    bool released = texturesReleased.exchange(false);
+    bool trim = mayTrim && releaseMode() == ReleaseMode::Trim && (released || trimPending) && nowMs() - lastActivityMs >= 3000;
+    if (released)
+        trimPending = true;
+    if (!released && !trim)
+        return;
+    Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
+    device->GetImmediateContext(&context);
+    if (context)
+        context->Flush();
+    ++(mayTrim ? watchFlushes : releaseFlushes);
+    Microsoft::WRL::ComPtr<IDXGIDevice3> dxgiDevice;
+    if (trim && SUCCEEDED(device->QueryInterface(IID_PPV_ARGS(&dxgiDevice)))) {
+        trimPending = false;
+        dxgiDevice->Trim();
+        ++trims;
+    }
+}
+
+void flushReleasedTextures()
+{
+    EGLDisplay display = eglGetCurrentDisplay();
+    if (auto* device = display != EGL_NO_DISPLAY ? angleDevice(display) : nullptr)
+        flushDevice(device, false);
+}
+
 long currentDeviceRemovedReason()
 {
     EGLDisplay display = eglGetCurrentDisplay();
@@ -160,6 +236,13 @@ void watchCurrentDevice(void (*check)(long reason))
             while (true) {
                 std::this_thread::sleep_for(std::chrono::seconds(1));
                 check(device->GetDeviceRemovedReason());
+                if (releaseMode() != ReleaseMode::None) {
+                    {
+                        Locker locker { registryLock };
+                        forgetStaleTextures();
+                    }
+                    flushDevice(device.Get(), true);
+                }
             }
         })->detach();
     });
@@ -267,6 +350,8 @@ struct WrappedTexture {
 static void destroyWrappedTexture(const WrappedTexture& wrapped)
 {
     static auto destroyImage = reinterpret_cast<PFNEGLDESTROYIMAGEKHRPROC>(eglGetProcAddress("eglDestroyImageKHR"));
+    texturesReleased = true;
+    noteActivity();
     textureBytes -= bytesForSize(wrapped.size);
     if (wrapped.glTexture)
         glDeleteTextures(1, &wrapped.glTexture);
@@ -392,6 +477,7 @@ static void releaseWrappedTexture(void* context)
         // Deleting a texture Skia last bound unbinds it under Skia (see createSkiaBackend's trim).
         if (auto* grContext = PlatformDisplay::sharedDisplay().skiaGrContext())
             grContext->resetContext(kTextureBinding_GrGLBackendState);
+        flushReleasedTextures();
         return;
     }
     auto& pool = texturePool();
@@ -400,6 +486,7 @@ static void releaseWrappedTexture(void* context)
     if (pool.trim(false)) {
         if (auto* grContext = PlatformDisplay::sharedDisplay().skiaGrContext())
             grContext->resetContext(kTextureBinding_GrGLBackendState);
+        flushReleasedTextures();
     }
 }
 
@@ -443,12 +530,15 @@ std::unique_ptr<ImageBufferBackend> createSkiaBackend(const ImageBufferParameter
         Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
         device->GetImmediateContext(&context);
         Microsoft::WRL::ComPtr<ID3D11Multithread> multithread;
-        if (context && SUCCEEDED(context.As(&multithread)))
+        if (context && SUCCEEDED(context.As(&multithread))) {
             multithread->SetMultithreadProtected(TRUE);
+            deviceProtected = true;
+        }
     });
     if (isSoftwareAdapter(device))
         return fail("software adapter (WARP); GLASS_GPU_RASTER_ALLOW_WARP=1 to use it anyway");
     threadMadeBuffers = true;
+    noteActivity();
 
     auto& pool = texturePool();
     std::optional<WrappedTexture> reused;
@@ -616,7 +706,8 @@ MemoryUse takeMemoryUse()
 {
     uint64_t current = textureBytes;
     return { current, std::max(peakTextureBytes.exchange(current), current), knownBudget, liveImages,
-        static_cast<uint64_t>(std::max<int64_t>(pooledBytes, 0)), static_cast<uint64_t>(std::max<int64_t>(skiaCacheBytes, 0)) };
+        static_cast<uint64_t>(std::max<int64_t>(pooledBytes, 0)), static_cast<uint64_t>(std::max<int64_t>(skiaCacheBytes, 0)),
+        releaseFlushes.exchange(0), watchFlushes.exchange(0), trims.exchange(0) };
 }
 
 void releaseThreadResources()
@@ -630,6 +721,7 @@ void releaseThreadResources()
         texturePool().destroyAll();
         if (auto* grContext = display.skiaGrContext())
             grContext->freeGpuResources();
+        flushReleasedTextures();
     }
     // No context: drops this thread's, here rather than at thread exit.
     display.setSkiaGLContextForCurrentThread(nullptr);
