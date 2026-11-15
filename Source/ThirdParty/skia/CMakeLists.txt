@@ -1005,18 +1005,19 @@ target_include_directories(Skia
 )
 
 file(MAKE_DIRECTORY "${Skia_FRAMEWORK_HEADERS_DIR}/top")
-file(CREATE_LINK
-    "${CMAKE_CURRENT_SOURCE_DIR}/include"
-    "${Skia_FRAMEWORK_HEADERS_DIR}/top/skia"
-    SYMBOLIC
-)
-
 file(MAKE_DIRECTORY "${Skia_FRAMEWORK_HEADERS_DIR}/mod/skia/modules")
-file(CREATE_LINK
-    "${CMAKE_CURRENT_SOURCE_DIR}/modules/svg/include"
-    "${Skia_FRAMEWORK_HEADERS_DIR}/mod/skia/modules/svg"
-    SYMBOLIC
-)
+if (WIN32)
+    # Permit native Windows builds without Developer Mode or symlink privileges.
+    file(COPY "${CMAKE_CURRENT_SOURCE_DIR}/include/"
+        DESTINATION "${Skia_FRAMEWORK_HEADERS_DIR}/top/skia")
+    file(COPY "${CMAKE_CURRENT_SOURCE_DIR}/modules/svg/include/"
+        DESTINATION "${Skia_FRAMEWORK_HEADERS_DIR}/mod/skia/modules/svg")
+else ()
+    file(CREATE_LINK "${CMAKE_CURRENT_SOURCE_DIR}/include"
+        "${Skia_FRAMEWORK_HEADERS_DIR}/top/skia" SYMBOLIC)
+    file(CREATE_LINK "${CMAKE_CURRENT_SOURCE_DIR}/modules/svg/include"
+        "${Skia_FRAMEWORK_HEADERS_DIR}/mod/skia/modules/svg" SYMBOLIC)
+endif ()
 
 target_compile_definitions(Skia PRIVATE
     SKIA_IMPLEMENTATION=1
