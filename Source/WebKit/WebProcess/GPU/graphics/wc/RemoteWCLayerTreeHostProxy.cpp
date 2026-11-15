@@ -105,6 +105,15 @@ void RemoteWCLayerTreeHostProxy::update(WCUpdateInfo&& updateInfo, CompletionHan
     sendWithAsyncReply(Messages::RemoteWCLayerTreeHost::Update(updateInfo), WTF::move(completionHandler));
 }
 
+#if OS(WINDOWS)
+void RemoteWCLayerTreeHostProxy::setFrozen(bool frozen)
+{
+    // No connection yet: nothing has been presented, so there is nothing to hold back.
+    if (m_gpuProcessConnection.get())
+        send(Messages::RemoteWCLayerTreeHost::SetFrozen(frozen));
+}
+#endif
+
 #if ENABLE(VIDEO) && OS(WINDOWS)
 namespace {
 

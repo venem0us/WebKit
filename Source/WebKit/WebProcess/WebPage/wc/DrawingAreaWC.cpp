@@ -153,6 +153,9 @@ void DrawingAreaWC::setLayerTreeStateIsFrozen(bool isFrozen)
     if (m_isRenderingSuspended == isFrozen)
         return;
     m_isRenderingSuspended = isFrozen;
+#if OS(WINDOWS)
+    m_remoteWCLayerTreeHostProxy->setFrozen(isFrozen);
+#endif
     if (!m_isRenderingSuspended && m_hasDeferredRenderingUpdate) {
         m_hasDeferredRenderingUpdate = false;
         triggerRenderingUpdate();

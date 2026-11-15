@@ -200,6 +200,14 @@ void RemoteWCLayerTreeHost::scheduleVideoFrameDrain()
     });
 }
 
+void RemoteWCLayerTreeHost::setFrozen(bool frozen)
+{
+    // After a process swap the window shows the next page, painted by the browser if it isn't composited. A frame this
+    // page presented again there (up to a second after its last update) covered it, and nothing repainted it: the next
+    // page showed this one's pixels until a scroll (1.19.67, New Tab -> Wikipedia, 26 of 30 on the GPU PC).
+    m_shownPresents->frozen = frozen;
+}
+
 void RemoteWCLayerTreeHost::scheduleShownPresents()
 {
     // GLASS_NO_SHOWN_PRESENTS=1 turns these off (comparison, rollback).
@@ -215,7 +223,7 @@ void RemoteWCLayerTreeHost::scheduleShownPresents()
             if (last)
                 state->scheduled = false;
             auto* host = state->host;
-            if (!host || !host->m_scene || !IsWindowVisible(reinterpret_cast<HWND>(host->m_nativeWindow)))
+            if (!host || state->frozen || !host->m_scene || !IsWindowVisible(reinterpret_cast<HWND>(host->m_nativeWindow)))
                 return;
             // Queued ahead of the task that destroys the scene, like the video frames.
             remoteGraphicsStreamWorkQueue().dispatch([scene = host->m_scene.get()] {
