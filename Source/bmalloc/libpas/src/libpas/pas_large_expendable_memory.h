@@ -39,7 +39,15 @@ struct pas_large_expendable_memory {
 };
 
 #define PAS_LARGE_EXPENDABLE_MEMORY_BASE_HEADER_SIZE PAS_OFFSETOF(pas_large_expendable_memory, header.states)
+/* Glass: on Windows a 4 KB header (one system page), for about 8 MB of payload aligned to 8 MB, instead of 16 KB for
+   about 32 MB aligned to 32 MB. Windows charges this memory to the process as soon as libpas allocates it, touched or
+   not, and the alignment padding with it: every WebKit process and the browser had 64 MB committed here and used almost
+   none of it. A process that needs more gets another one. */
+#if PAS_OS(WINDOWS)
+#define PAS_LARGE_EXPENDABLE_MEMORY_HEADER_SIZE ((size_t)4096)
+#else
 #define PAS_LARGE_EXPENDABLE_MEMORY_HEADER_SIZE PAS_EXPENDABLE_MEMORY_PAGE_SIZE
+#endif
 
 #define PAS_LARGE_EXPENDABLE_MEMORY_ALIGNMENT \
     (PAS_LARGE_EXPENDABLE_MEMORY_HEADER_SIZE / sizeof(pas_expendable_memory_state) * \
