@@ -63,6 +63,8 @@ public:
     // Glass: called (on the main thread) when the GPU process this layer tree was in has gone. The next update starts a
     // new one, with an empty scene. With the identifier of the connection that closed.
     void setGPUProcessDidCloseHandler(Function<void(GPUProcessConnectionIdentifier)>&& handler) { m_gpuProcessDidCloseHandler = WTF::move(handler); }
+    // Glass: the page's layer tree was frozen (the page was swapped out or suspended) or thawed.
+    void setFrozen(bool);
 #endif
 
     WTF_ABSTRACT_THREAD_SAFE_REF_COUNTED_AND_CAN_MAKE_WEAK_PTR_IMPL;

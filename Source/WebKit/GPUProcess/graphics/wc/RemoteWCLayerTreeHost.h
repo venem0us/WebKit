@@ -67,6 +67,7 @@ public:
     void updateVideoFrame(WebCore::PlatformLayerIdentifier, WCBackingStore&&);
     void importVideoTexture(WebCore::PlatformLayerIdentifier, uint64_t texture, WebCore::IntSize, WTF::Win32Handle&&, CompletionHandler<void(bool)>&&);
     void updateVideoTexture(WebCore::PlatformLayerIdentifier, uint64_t texture);
+    void setFrozen(bool);
 #endif
 
     void ref() const final { RefCounted::ref(); }
@@ -113,6 +114,8 @@ private:
     struct ShownPresents : RefCounted<ShownPresents> {
         RemoteWCLayerTreeHost* host { nullptr };
         bool scheduled { false };
+        // The page's layer tree is frozen (swapped out or suspended): its window may show another page now.
+        bool frozen { false };
     };
     void scheduleShownPresents();
     uint64_t m_nativeWindow { 0 };
