@@ -32,9 +32,22 @@
 #include "pas_bootstrap_free_heap.h"
 #include "pas_large_free_heap_config.h"
 #include "pas_mte.h"
+#include "pas_page_malloc.h"
 #include "pas_payload_reservation_page_list.h"
 #include "pas_zero_memory.h"
 #include <stdio.h>
+
+/* Glass: on Windows a megapage is only reserved, and each page is committed when the cache hands it out. A megapage
+   (16 MB) arrives committed from its provider, and Windows charges committed memory to the process whether it is
+   touched or not, so every process paid for whole megapages of which it used a few pages (about 100 MB per tab
+   process). Megapage caches only ever hold ordinary read-write heap memory (the bootstrap heap's, or a reserved
+   primitive heap's), so the pages come back read-write. */
+#if PAS_OS(WINDOWS)
+#include <windows.h>
+#define PAS_MEGAPAGE_CACHE_COMMITS_LAZILY 1
+#else
+#define PAS_MEGAPAGE_CACHE_COMMITS_LAZILY 0
+#endif
 
 typedef struct {
     pas_megapage_cache* cache;
@@ -108,6 +121,12 @@ static pas_aligned_allocation_result megapage_cache_allocate_aligned(size_t size
     PAS_ASSERT(base_before_exclusion);
 
     zero_mode = bootstrap_result.zero_mode;
+#if PAS_MEGAPAGE_CACHE_COMMITS_LAZILY
+    /* Decommitted pages read as zero once they are committed again. */
+    pas_page_malloc_decommit_without_mprotect(
+        base_before_exclusion, new_size, /* is_symmetric */ true, pas_memory_flavor_plain);
+    zero_mode = pas_zero_mode_is_all_zero;
+#endif
     if (cache_config->should_zero) {
         switch (zero_mode) {
         case pas_zero_mode_may_have_non_zero:
@@ -177,7 +196,48 @@ void pas_megapage_cache_construct(pas_megapage_cache* cache,
     pas_simple_large_free_heap_construct(&cache->free_heap);
     cache->provider = provider;
     cache->provider_arg = (void*)(uintptr_t)cache_size;
+    cache->committed_begin = 0;
+    cache->committed_end = 0;
 }
+
+#if PAS_MEGAPAGE_CACHE_COMMITS_LAZILY
+/* Commits the page being handed out. Pages leave a megapage in address order, so this commits a window of
+   PAS_MEGAPAGE_CACHE_COMMIT_WINDOW around the page, within its megapage, and the following pages in that window need
+   no system call: one call per 16 KB page made allocation-heavy scripts measurably slower. */
+#define PAS_MEGAPAGE_CACHE_COMMIT_WINDOW ((size_t)256 * 1024)
+
+static void commit_page(pas_megapage_cache* cache, pas_megapage_cache_config* cache_config, uintptr_t page)
+{
+    uintptr_t begin;
+    uintptr_t end;
+
+    begin = page;
+    end = page + cache_config->allocation_size;
+
+    if (begin >= cache->committed_begin && end <= cache->committed_end)
+        return;
+
+    if (!cache_config->allocation_alignment.alignment_begin
+        && cache_config->allocation_size < PAS_MEGAPAGE_CACHE_COMMIT_WINDOW
+        && cache_config->megapage_size >= PAS_MEGAPAGE_CACHE_COMMIT_WINDOW) {
+        uintptr_t megapage_begin;
+        megapage_begin = pas_round_down_to_power_of_2(page, cache_config->megapage_size);
+        if (end <= megapage_begin + cache_config->megapage_size) {
+            begin = pas_round_down_to_power_of_2(begin, PAS_MEGAPAGE_CACHE_COMMIT_WINDOW);
+            end = pas_round_up_to_power_of_2(end, PAS_MEGAPAGE_CACHE_COMMIT_WINDOW);
+        }
+    }
+
+    /* One call does it unless the range spans two reservations, which pas_page_malloc knows how to walk. */
+    if (!VirtualAlloc((void*)begin, end - begin, MEM_COMMIT, PAGE_READWRITE)) {
+        pas_page_malloc_commit_without_mprotect(
+            (void*)begin, end - begin, /* is_symmetric */ true, pas_memory_flavor_plain);
+    }
+
+    cache->committed_begin = begin;
+    cache->committed_end = end;
+}
+#endif
 
 void* pas_megapage_cache_try_allocate(pas_megapage_cache* cache,
                                       pas_megapage_cache_config* cache_config,
@@ -213,6 +273,9 @@ void* pas_megapage_cache_try_allocate(pas_megapage_cache* cache,
         return NULL;
     
     PAS_ASSERT(result.begin);
+#if PAS_MEGAPAGE_CACHE_COMMITS_LAZILY
+    commit_page(cache, cache_config, result.begin);
+#endif
     if (cache_config->should_zero)
         PAS_ASSERT(result.zero_mode == pas_zero_mode_is_all_zero);
     
