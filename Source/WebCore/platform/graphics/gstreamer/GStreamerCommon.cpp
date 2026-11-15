@@ -42,6 +42,11 @@
 #include <fnmatch.h>
 #endif
 #include <wtf/RunLoop.h>
+#if OS(WINDOWS)
+#include <windows.h>
+#include <wtf/Lock.h>
+#include <wtf/SetForScope.h>
+#endif
 #include <mutex>
 #include <wtf/FileSystem.h>
 #include <wtf/HashMap.h>
@@ -465,20 +470,166 @@ bool ensureGStreamerInitializedNonWebProcess()
 }
 
 #if OS(WINDOWS)
-// Experimental bridge: dispatch the default GLib context on WebKit's main
-// thread, retaining the Windows message pump used by the Win port.
+// Dispatches the default GLib context on WebKit's main thread, keeping the Windows message pump the Win port uses.
+// GStreamer's GLib sources live there: pipeline bus watches (state changes, buffering, end of stream), timeouts, and
+// callbacks streaming threads hand to the main thread. This used to poll the context every 10 ms for as long as the
+// process lived once GStreamer was set up, which cost a background tab with a paused player about 4% of a core.
+// Now it waits the way GLib's own loop does: on the handles the context's sources poll (the context's wake-up event,
+// pipeline buses), through the thread pool, and on a one-shot timer for the earliest GLib timeout. Idle, nothing wakes.
+class WindowsGLibContextPump {
+public:
+    static WindowsGLibContextPump& singleton()
+    {
+        static NeverDestroyed<WindowsGLibContextPump> pump;
+        return pump;
+    }
+
+    void start()
+    {
+        if (m_started)
+            return;
+        m_started = true;
+        // GLASS_GSTREAMER_POLL_PUMP=1: the old 10 ms polling, for comparison or as a rollback.
+        if (const char* poll = getenv("GLASS_GSTREAMER_POLL_PUMP"); poll && !strcmp(poll, "1")) {
+            m_polling = true;
+            m_timer.startRepeating(10_ms);
+            return;
+        }
+        pump();
+    }
+
+private:
+    friend class NeverDestroyed<WindowsGLibContextPump>;
+    WindowsGLibContextPump() = default;
+
+    struct Wait {
+        HANDLE waitHandle { nullptr };
+        HANDLE handle { nullptr };
+    };
+
+    // A thread-pool wait on an auto-reset event consumes the signal, and GLib would then not see it when it checks
+    // its sources: remember which handles fired and mark their sources ready. (A source re-checks its own state, so
+    // marking one that has nothing to do is harmless.)
+    static void CALLBACK handleSignaled(PVOID context, BOOLEAN)
+    {
+        auto& pump = singleton();
+        {
+            Locker locker { pump.m_signaledLock };
+            pump.m_signaled.append(static_cast<HANDLE>(context));
+        }
+        if (!pump.m_wakePending.exchange(true))
+            RunLoop::mainSingleton().dispatch([] { singleton().pump(); });
+    }
+
+    void clearWaits()
+    {
+        // No completion event: a callback that is running only records a handle and dispatches to this thread.
+        for (auto& wait : m_waits)
+            ::UnregisterWaitEx(wait.waitHandle, nullptr);
+        m_waits.clear();
+    }
+
+    void pump()
+    {
+        if (m_polling) {
+            for (unsigned count = 0; count < 128 && g_main_context_pending(nullptr); ++count)
+                g_main_context_iteration(nullptr, false);
+            return;
+        }
+        if (m_inPump)
+            return;
+        SetForScope inPump(m_inPump, true);
+        m_wakePending = false;
+        clearWaits();
+        m_timer.stop();
+
+        // The prepare/query/check/dispatch calls need the context itself (NULL is only accepted by the convenience calls).
+        auto* context = g_main_context_default();
+        if (!g_main_context_acquire(context)) {
+            // Another thread is iterating the default context: look again shortly.
+            m_timer.startOneShot(10_ms);
+            return;
+        }
+        auto release = makeScopeExit([context] { g_main_context_release(context); });
+
+        Vector<HANDLE> signaled;
+        {
+            Locker locker { m_signaledLock };
+            signaled = std::exchange(m_signaled, { });
+        }
+
+        for (unsigned count = 0; count < 128; ++count) {
+            gint priority = 0;
+            g_main_context_prepare(context, &priority);
+            gint timeout = 0;
+            gint fdCount = 0;
+            while ((fdCount = g_main_context_query(context, priority, &timeout, m_fds.mutableSpan().data(), m_fds.size())) > static_cast<gint>(m_fds.size()))
+                m_fds.grow(fdCount);
+            if (fdCount) {
+                g_poll(m_fds.mutableSpan().data(), fdCount, 0);
+                for (gint i = 0; i < fdCount; ++i) {
+                    if (signaled.contains(reinterpret_cast<HANDLE>(m_fds[i].fd)))
+                        m_fds[i].revents |= m_fds[i].events;
+                }
+            }
+            if (!g_main_context_check(context, priority, m_fds.mutableSpan().data(), fdCount)) {
+                // Woken by a handle but nothing to run: count it (see wait()).
+                if (!count && !signaled.isEmpty())
+                    ++m_emptyWakes;
+                wait(fdCount, timeout);
+                return;
+            }
+            m_emptyWakes = 0;
+            signaled.clear();
+            g_main_context_dispatch(context);
+        }
+        // Still busy after 128 dispatches: come back once the run loop has handled its other work.
+        m_timer.startOneShot(0_s);
+    }
+
+    void wait(gint fdCount, gint timeout)
+    {
+        // A handle that stays signaled while its source has nothing to do would wake this again at once, over and over:
+        // after a few such wakes in a row, poll every 10 ms as before until something is dispatched.
+        if (m_emptyWakes >= 3) {
+            m_timer.startOneShot(Seconds::fromMilliseconds(timeout < 0 ? 10 : std::min(timeout, 10)));
+            return;
+        }
+        for (gint i = 0; i < fdCount; ++i) {
+            auto handle = reinterpret_cast<HANDLE>(m_fds[i].fd);
+            // G_WIN32_MSG_HANDLE stands for this thread's message queue, which the run loop itself serves.
+            if (m_fds[i].fd == G_WIN32_MSG_HANDLE || !handle || m_waits.containsIf([&](auto& wait) { return wait.handle == handle; }))
+                continue;
+            HANDLE waitHandle = nullptr;
+            if (::RegisterWaitForSingleObject(&waitHandle, handle, handleSignaled, handle, INFINITE, WT_EXECUTEONLYONCE | WT_EXECUTEINWAITTHREAD))
+                m_waits.append({ waitHandle, handle });
+        }
+        // GLib's earliest timeout, and in any case a look every half second in case a wake-up was missed (a source's
+        // handle replaced while it was being waited on, say).
+        constexpr gint fallbackMilliseconds = 500;
+        auto milliseconds = timeout < 0 ? fallbackMilliseconds : std::min(timeout, fallbackMilliseconds);
+        m_timer.startOneShot(Seconds::fromMilliseconds(milliseconds));
+    }
+
+    RunLoop::Timer m_timer { RunLoop::mainSingleton(), "GStreamer::WindowsContextPump"_s, [] { singleton().pump(); } };
+    Vector<GPollFD> m_fds { 16 };
+    Vector<Wait> m_waits;
+    Lock m_signaledLock;
+    Vector<HANDLE> m_signaled WTF_GUARDED_BY_LOCK(m_signaledLock);
+    std::atomic<bool> m_wakePending { false };
+    unsigned m_emptyWakes { 0 };
+    bool m_started { false };
+    bool m_polling { false };
+    bool m_inPump { false };
+};
+
 static void startWindowsGStreamerContextPump()
 {
     if (!isMainThread()) {
         RunLoop::mainSingleton().dispatch([] { startWindowsGStreamerContextPump(); });
         return;
     }
-    static NeverDestroyed<RunLoop::Timer> timer { RunLoop::mainSingleton(), "GStreamer::WindowsContextPump"_s, [] {
-        for (unsigned count = 0; count < 128 && g_main_context_pending(nullptr); ++count)
-            g_main_context_iteration(nullptr, false);
-    } };
-    if (!timer->isActive())
-        timer->startRepeating(10_ms);
+    WindowsGLibContextPump::singleton().start();
 }
 #endif
 
