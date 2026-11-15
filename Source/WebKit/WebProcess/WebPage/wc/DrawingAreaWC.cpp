@@ -104,8 +104,30 @@ void DrawingAreaWC::setRootCompositingLayer(WebCore::Frame& frame, GraphicsLayer
     }
     if (rootGraphicsLayer)
         send(Messages::DrawingAreaProxy::EnterAcceleratedCompositingMode(m_backingStoreStateID, { }));
+#if OS(WINDOWS)
+    if (frame.isMainFrame())
+        updateLayerTreeHostFrozen();
+#endif
     updateRootLayers();
 }
+
+#if OS(WINDOWS)
+// The GPU process's layer tree host presents the page's last composited frame again up to a second after an update (see
+// RemoteWCLayerTreeHost::scheduleShownPresents). Not while rendering is suspended (a process swap), and not once the page
+// has left compositing mode: the browser then paints the page itself, and the old frame presented over that paint stayed
+// until something repainted that part (1.19.69 on the GPU PC: about:blank after the New Tab page showed the New Tab page
+// for minutes; a BBC page kept its consent box's dark overlay after the box had gone, until a scroll).
+void DrawingAreaWC::updateLayerTreeHostFrozen()
+{
+    // As isCompositingMode(), without its assertion: this can run before the main frame's root layer is added.
+    auto& mainWebFrame = m_webPage->mainWebFrame();
+    auto index = m_rootLayers.findIf([&](const auto& layer) {
+        return layer.frameID == mainWebFrame.frameID();
+    });
+    bool composited = !mainWebFrame.isRootFrame() || (index != notFound && m_rootLayers[index].contentLayer);
+    m_remoteWCLayerTreeHostProxy->setFrozen(m_isRenderingSuspended || !composited);
+}
+#endif
 
 void DrawingAreaWC::addRootFrame(WebCore::FrameIdentifier frameID)
 {
@@ -154,7 +176,7 @@ void DrawingAreaWC::setLayerTreeStateIsFrozen(bool isFrozen)
         return;
     m_isRenderingSuspended = isFrozen;
 #if OS(WINDOWS)
-    m_remoteWCLayerTreeHostProxy->setFrozen(isFrozen);
+    updateLayerTreeHostFrozen();
 #endif
     if (!m_isRenderingSuspended && m_hasDeferredRenderingUpdate) {
         m_hasDeferredRenderingUpdate = false;
