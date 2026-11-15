@@ -171,7 +171,7 @@ private:
     void removeWheelEventTestCompletionDeferralForReason(ScrollingNodeID, WheelEventTestMonitor::DeferReason) const final;
     ScrollingNodeID scrollingNodeIDForTesting() const final;
 
-#if USE(COORDINATED_GRAPHICS)
+#if USE(COORDINATED_GRAPHICS) || PLATFORM(WIN)
     bool scrollAnimationEnabled() const final;
 #endif
 

@@ -426,7 +426,9 @@ void ScrollAnimator::removeWheelEventTestCompletionDeferralForReason(ScrollingNo
         monitor->removeDeferralForReason(identifier, reason);
 }
 
-#if USE(COORDINATED_GRAPHICS)
+// Glass: also on Windows, where wheel scrolling animates too (ScrollingEffectsController::handleWheelEvent): without
+// this the controller's default (true) applied, and the wheel glided with Smooth scrolling turned off.
+#if USE(COORDINATED_GRAPHICS) || PLATFORM(WIN)
 bool ScrollAnimator::scrollAnimationEnabled() const
 {
     return protect(scrollableArea())->scrollAnimatorEnabled();
