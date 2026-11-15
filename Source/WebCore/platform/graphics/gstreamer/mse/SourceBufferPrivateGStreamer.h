@@ -115,6 +115,11 @@ private:
     void detach() final;
 
     bool m_hasBeenRemovedFromMediaSource { false };
+#if OS(WINDOWS)
+    // ISO BMFF: whether this SourceBuffer's data has included an initialization segment (moov) yet.
+    bool m_hasSeenInitializationSegment { false };
+    Ref<SharedBuffer> withInitializationSegmentIfMissing(Ref<SharedBuffer>&&);
+#endif
     ContentType m_type;
     bool m_textTracksEnabled { false };
     std::unique_ptr<AppendPipeline> m_appendPipeline;
