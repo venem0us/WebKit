@@ -469,6 +469,28 @@ static void webKitMediaSrcWaitForPadLinkedOrFlush(GstPad* pad, DataMutexLocker<S
     GST_DEBUG_OBJECT(pad, "Finished waiting for the pad to be linked.");
 }
 
+#if OS(WINDOWS)
+// Whether two caps are the same apart from their frame rate. Some streams (Twitch's fragmented MP4) signal a slightly
+// different frame rate in almost every fragment (60/1, 241/4, 119/2, 182/3...), and a CAPS event for each made the
+// decoder and sink chain renegotiate about 7 times a second. The buffers carry their own timestamps and durations,
+// so such a change needs no CAPS event.
+static bool capsDifferOnlyInFramerate(GstCaps* a, GstCaps* b)
+{
+    if (!a || !b || gst_caps_get_size(a) != 1 || gst_caps_get_size(b) != 1)
+        return false;
+    if (!gst_caps_features_is_equal(gst_caps_get_features(a, 0), gst_caps_get_features(b, 0)))
+        return false;
+    GstStructure* first = gst_structure_copy(gst_caps_get_structure(a, 0));
+    GstStructure* second = gst_structure_copy(gst_caps_get_structure(b, 0));
+    gst_structure_remove_field(first, "framerate");
+    gst_structure_remove_field(second, "framerate");
+    bool equal = gst_structure_is_equal(first, second);
+    gst_structure_free(first);
+    gst_structure_free(second);
+    return equal;
+}
+#endif
+
 // Called with STREAM_LOCK.
 static void webKitMediaSrcLoop(void* userData)
 {
@@ -639,7 +661,11 @@ static void webKitMediaSrcLoop(void* userData)
     if (GST_IS_SAMPLE(object.get())) {
         GRefPtr<GstSample> sample = adoptGRef(GST_SAMPLE(object.leakRef()));
 
-        if (!gst_caps_is_equal(gst_sample_get_caps(sample.get()), streamingMembers->previousCaps.get())) {
+        if (!gst_caps_is_equal(gst_sample_get_caps(sample.get()), streamingMembers->previousCaps.get())
+#if OS(WINDOWS)
+            && !capsDifferOnlyInFramerate(gst_sample_get_caps(sample.get()), streamingMembers->previousCaps.get())
+#endif
+            ) {
             // This sample needs new caps (typically because of a quality change).
             streamingMembers->previousCaps = gst_sample_get_caps(sample.get());
             // This CAPS event may block, so we release the lock and reevaluate later if there's been a flush in the meantime.
