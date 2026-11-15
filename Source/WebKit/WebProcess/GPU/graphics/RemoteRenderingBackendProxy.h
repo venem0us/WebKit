@@ -50,6 +50,8 @@
 #include <WebCore/RenderingResourceIdentifier.h>
 #include <WebCore/SharedMemory.h>
 #include <WebCore/Timer.h>
+#include <atomic>
+#include <memory>
 #include <span>
 #include <wtf/Deque.h>
 #include <wtf/HashMap.h>
@@ -106,6 +108,21 @@ public:
 
     ~RemoteRenderingBackendProxy();
 
+#if USE(SKIA) && PLATFORM(WIN)
+    // Glass: whether buffers for this purpose are drawn on the GPU (GLASS_GPU_RASTER: "1" everything accelerated,
+    // "tiles" layer tiles only). Not after this process's GPU process has gone twice (noteGPUProcessLost): a GPU process
+    // that keeps ending, drawing on the GPU or not, would otherwise get every web process terminated, so the pages go
+    // back to drawing on the processor.
+    static bool gpuRasterEnabled(WebCore::RenderingPurpose);
+    // Whether GLASS_GPU_RASTER drawing has been given up on, after this loss or an earlier one.
+    static bool noteGPUProcessLost();
+#endif
+#if USE(GRAPHICS_LAYER_WC)
+    // Glass: the GPU process behind `connection` has gone (as the connection reported): if this proxy's stream is in it,
+    // disconnect and recreate the buffers in the next one now, rather than when the stream's own close arrives. On this
+    // proxy's dispatcher.
+    void gpuProcessDidClose(GPUProcessConnectionIdentifier connection);
+#endif
 
     RemoteResourceCacheProxy& remoteResourceCacheProxy() const { return m_remoteResourceCacheProxy; }
 
@@ -269,6 +286,13 @@ private:
     RenderingUpdateID m_renderingUpdateID;
     RenderingUpdateID m_didRenderingUpdateID;
     bool m_isResponsive { true };
+#if USE(GRAPHICS_LAYER_WC)
+    // Set (and replaced) when the GPU process connection closes, for the fences waiting on it (flushImageBuffers).
+    std::shared_ptr<std::atomic<bool>> m_connectionLost { std::make_shared<std::atomic<bool>>(false) };
+    // The GPU process connection the stream above was opened through (kept when it becomes unresponsive, unlike
+    // m_gpuProcessConnection), so gpuProcessDidClose acts only on a stream in the GPU process that has gone.
+    std::optional<GPUProcessConnectionIdentifier> m_streamGPUProcessConnection;
+#endif
 };
 
 } // namespace WebKit

@@ -33,6 +33,7 @@
 
 #if PLATFORM(WIN)
 #include "PlatformDisplayWin.h"
+#include <wtf/Lock.h>
 #endif
 
 #if USE(LIBEPOXY)
@@ -109,6 +110,13 @@ void PlatformDisplay::terminateEGLDisplay()
 
 GLContext* PlatformDisplay::sharingGLContext()
 {
+#if PLATFORM(WIN)
+    // Glass: in the GPU process the compositor's thread and each drawing thread make their contexts sharing this one,
+    // often at once (a page's first update, or every layer and buffer given to a new GPU process together). Made by two
+    // threads at once, one of them was left sharing with a context the other's assignment destroyed (EGL_BAD_MATCH).
+    static Lock lock;
+    Locker locker { lock };
+#endif
     if (!m_sharingGLContext)
         m_sharingGLContext = GLContext::createSharing(*this);
     return m_sharingGLContext.get();

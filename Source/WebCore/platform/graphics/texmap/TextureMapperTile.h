@@ -40,6 +40,9 @@ public:
 
     void updateContents(NativeImage&, const IntRect&);
     void updateContents(GraphicsLayer*, const IntRect&, float scale = 1);
+    // From a GL texture holding the dirty rect's pixels at its origin (a GPU-drawn buffer): a copy on the GPU.
+    // False if the copy wouldn't fit this tile's texture (nothing is copied).
+    bool updateContentsFromTexture(unsigned sourceTextureID, const IntRect& dirtyRect);
     WEBCORE_EXPORT virtual void paint(TextureMapper&, const TransformationMatrix&, float, bool allEdgesExposed);
     virtual ~TextureMapperTile();
 

@@ -29,6 +29,7 @@
 
 #include "ImageBufferBackendHandle.h"
 #include <WebCore/ImageBuffer.h>
+#include <WebCore/RenderingResourceIdentifier.h>
 #include <wtf/TZoneMalloc.h>
 
 namespace WebKit {
@@ -42,15 +43,19 @@ public:
     // Sends pixels that are already in shared memory (a video frame) instead of an image buffer's.
     void setBitmap(RefPtr<WebCore::ShareableBitmap>&& bitmap) { m_bitmap = WTF::move(bitmap); }
     WebCore::ShareableBitmap* bitmap() const { return m_bitmap.get(); }
+    // A buffer drawn on the GPU (an accelerated image buffer in the GPU process, see GLASS_GPU_RASTER) travels as its
+    // name, not its pixels: the compositor, in the same process, reads its texture.
+    std::optional<WebCore::RenderingResourceIdentifier> acceleratedBufferIdentifier() const;
 
 private:
     friend struct IPC::ArgumentCoder<WCBackingStore>;
 
-    WCBackingStore(std::optional<ImageBufferBackendHandle>&&);
+    WCBackingStore(std::optional<ImageBufferBackendHandle>&&, std::optional<WebCore::RenderingResourceIdentifier>&&);
     std::optional<ImageBufferBackendHandle> handle() const;
 
     RefPtr<WebCore::ImageBuffer> m_imageBuffer;
     RefPtr<WebCore::ShareableBitmap> m_bitmap;
+    std::optional<WebCore::RenderingResourceIdentifier> m_acceleratedBufferIdentifier;
 };
 
 } // namespace WebKit

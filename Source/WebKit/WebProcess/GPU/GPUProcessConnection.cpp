@@ -202,6 +202,17 @@ void GPUProcessConnection::didClose(IPC::Connection&)
     m_clients.clear();
 }
 
+#if OS(WINDOWS)
+void GPUProcessConnection::closeIfNotInitialized()
+{
+    if (m_hasInitialized || !m_connection->isValid())
+        return;
+    WTFLogAlways("Glass: no GPU process took GPU process connection %llu; closing it so that a new one is made", static_cast<unsigned long long>(identifier().toUInt64()));
+    m_connection->invalidate();
+    didClose(m_connection);
+}
+#endif
+
 void GPUProcessConnection::didReceiveInvalidMessage(IPC::Connection&, IPC::MessageName, const Vector<uint32_t>&)
 {
 }

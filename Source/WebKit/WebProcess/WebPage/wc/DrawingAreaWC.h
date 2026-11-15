@@ -34,6 +34,7 @@
 #include "WCLayerFactory.h"
 #include <WebCore/GraphicsLayerFactory.h>
 #include <WebCore/Timer.h>
+#include <wtf/Deque.h>
 
 namespace WebKit {
 
@@ -75,7 +76,9 @@ private:
     void graphicsLayerAdded(GraphicsLayerWC&) override;
     void graphicsLayerRemoved(GraphicsLayerWC&) override;
     void commitLayerUpdateInfo(WCLayerUpdateInfo&&) override;
-    RefPtr<WebCore::ImageBuffer> createImageBuffer(WebCore::FloatSize, float deviceScaleFactor) override;
+    RefPtr<WebCore::ImageBuffer> createImageBuffer(WebCore::FloatSize, float deviceScaleFactor, WebCore::FloatSize layerSize) override;
+    // Pixels the UI process can read (the page painted without compositing): never drawn on the GPU.
+    RefPtr<WebCore::ImageBuffer> createBitmapImageBuffer(WebCore::FloatSize, float deviceScaleFactor);
 #if ENABLE(VIDEO) && OS(WINDOWS)
     RefPtr<WebCore::MediaPlayerCompositorFrameSink> createVideoFrameSink(WebCore::PlatformLayerIdentifier) override;
 #endif
@@ -85,6 +88,9 @@ private:
     void sendUpdateAC();
     void sendUpdateNonAC();
     void updateRootLayers();
+#if OS(WINDOWS)
+    void gpuProcessDidClose(GPUProcessConnectionIdentifier);
+#endif
     void updateRootLayerDeviceScaleFactor(WebCore::GraphicsLayer&);
 
     struct RootLayerInfo {
@@ -106,8 +112,16 @@ private:
     bool m_deferredRenderingUpdateIsTick { false }; // the deferred update was a display tick's (see displayDidRefresh())
 #endif
     bool m_inUpdateRendering { false };
-    bool m_waitDidUpdate { false };
-    bool m_isForceRepaintCompletionHandlerDeferred { false };
+    bool m_waitDidUpdate { false }; // no update may start until displayDidRefresh()
+#if OS(WINDOWS)
+    // Updates started and not yet displayed. With GPU tiles a second may start while the first is still being drawn
+    // and composited (canPipelineRenderingUpdate()), never a third.
+    unsigned m_updatesInFlight { 0 };
+    bool m_lastUpdateChangedPlatformLayers { false };
+    Deque<uint64_t> m_updateStartsUs; // for the stats' cycle, one per update in flight
+    bool canPipelineRenderingUpdate();
+#endif
+    unsigned m_forceRepaintUpdatesToSkip { 0 }; // updates in flight when the forced repaint was asked for
     WCUpdateInfo m_updateInfo;
     Vector<RootLayerInfo, 1> m_rootLayers;
     const Ref<WorkQueue> m_commitQueue;

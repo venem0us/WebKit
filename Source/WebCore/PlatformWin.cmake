@@ -70,6 +70,7 @@ list(APPEND WebCore_SOURCES
 
     platform/graphics/opentype/OpenTypeUtilities.cpp
 
+    platform/graphics/win/D3D11SharedTexture.cpp
     platform/graphics/win/DIBPixelData.cpp
     platform/graphics/win/DisplayRefreshMonitorWin.cpp
     platform/graphics/win/FloatPointWin.cpp
@@ -128,6 +129,7 @@ list(APPEND WebCore_PRIVATE_FRAMEWORK_HEADERS
 
     platform/graphics/opentype/FontMemoryResource.h
 
+    platform/graphics/win/D3D11SharedTexture.h
     platform/graphics/win/DIBPixelData.h
     platform/graphics/win/FullScreenController.h
     platform/graphics/win/FullScreenControllerClient.h

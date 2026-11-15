@@ -78,12 +78,13 @@ void RemoteImageBuffer::getEffectiveRenderingModeForTesting(CompletionHandler<vo
 void RemoteImageBuffer::getBackendHandle(CompletionHandler<void(std::optional<ImageBufferBackendHandle>&&)>&& completionHandler)
 {
     assertIsCurrent(workQueue());
-    auto* sharing = m_imageBuffer->toBackendSharing();
+    // Not every backend's sharing makes handles (Windows' GPU textures are shared within this process).
+    auto* sharing = dynamicDowncast<ImageBufferBackendHandleSharing>(m_imageBuffer->toBackendSharing());
     if (!sharing) {
         completionHandler(std::nullopt);
         return;
     }
-    completionHandler(downcast<ImageBufferBackendHandleSharing>(*sharing).createBackendHandle());
+    completionHandler(sharing->createBackendHandle());
 }
 
 #if PLATFORM(COCOA)

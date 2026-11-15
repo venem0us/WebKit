@@ -3076,6 +3076,12 @@ void CanvasRenderingContext2DBase::prepareForDisplay()
 
 bool CanvasRenderingContext2DBase::delegatesDisplay() const
 {
+#if USE(SKIA) && PLATFORM(WIN)
+    // Glass: on Windows an accelerated 2D canvas's buffer lives in the GPU process and has no display delegate here, so
+    // a canvas shown "as layer contents" showed nothing. It is painted into its layer like an unaccelerated one; the
+    // GPU process draws it into the layer's tiles on the GPU.
+    return false;
+#endif
 #if !USE(SKIA)
     // FIXME: Delegate display of all accelerated 2D canvases.
     RefPtr canvas = dynamicDowncast<HTMLCanvasElement>(canvasBase());

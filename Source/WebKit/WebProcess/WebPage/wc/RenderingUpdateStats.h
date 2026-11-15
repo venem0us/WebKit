@@ -19,12 +19,16 @@
 #if OS(WINDOWS)
 
 #include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
+#include <mutex>
 #include <process.h>
 #include <string>
+#include <thread>
 #include <wtf/MonotonicTime.h>
+#include <wtf/RunLoop.h>
 #include <wtf/ThreadSafeRefCounted.h>
 
 namespace WebKit {
@@ -62,6 +66,57 @@ public:
         }
     }
 
+    // The GPU process went away and a page's layers are sent whole to the next one; onProcessor once it has gone twice
+    // with GLASS_GPU_RASTER (RemoteRenderingBackendProxy::gpuRasterEnabled), so the next one draws them on the processor.
+    static void noteGPUProcessResync(unsigned layers, bool onProcessor)
+    {
+        if (!enabled())
+            return;
+        if (auto* file = openLog()) {
+            std::fprintf(file, "@%.3fs gpu process gone: resending %u layers to the next one%s\n", (now() - processStartUs()) / 1000000.0, layers, onProcessor ? ", drawn on the processor from now on (gone twice)" : "");
+            std::fflush(file);
+        }
+    }
+
+    // Where the rendering update in flight is (process-wide: the last page to move on wins). A thread logs an update that
+    // has waited at one stage for 3 s or more, every 5 s, with how long ago the main thread last ran: a page that stopped
+    // drawing (after losing the GPU process, say) then shows what it waits on.
+    enum class Stage : uint8_t { Idle, Web, Fence, Hop, Compositor, UI };
+    static void noteStage(Stage stage)
+    {
+        if (!enabled())
+            return;
+        auto& state = watch();
+        state.since = now();
+        state.stage = stage;
+        static std::once_flag started;
+        std::call_once(started, [] {
+            std::thread([] {
+                auto& state = watch();
+                uint64_t lastLogged = 0;
+                for (;;) {
+                    std::this_thread::sleep_for(std::chrono::seconds(1));
+                    RunLoop::mainSingleton().dispatch([] {
+                        watch().mainRan = now();
+                    });
+                    auto stage = state.stage.load();
+                    auto nowUs = now();
+                    auto waited = nowUs - state.since.load();
+                    if (stage == Stage::Idle || waited < 3000000 || nowUs - lastLogged < 5000000)
+                        continue;
+                    lastLogged = nowUs;
+                    static constexpr const char* names[] = { "idle", "the page (main thread)", "the GPU process drawing tiles (fence)", "the main thread after the fence", "the GPU process compositing", "the UI process" };
+                    auto mainRan = state.mainRan.load();
+                    if (auto* file = openLog()) {
+                        std::fprintf(file, "@%.3fs rendering update waiting %.1fs on %s; main thread last ran %.1fs ago\n", (nowUs - processStartUs()) / 1000000.0,
+                            waited / 1000000.0, names[static_cast<unsigned>(stage)], mainRan ? (nowUs - mainRan) / 1000000.0 : -1.0);
+                        std::fflush(file);
+                    }
+                }
+            }).detach();
+        });
+    }
+
     static uint64_t now() { return static_cast<uint64_t>(MonotonicTime::now().secondsSinceEpoch().microseconds()); }
 
     struct Duration {
@@ -84,7 +139,8 @@ public:
         }
     };
 
-    // Timestamps of the update in flight (only one at a time: the next waits for displayDidRefresh).
+    // Timestamps of the update in flight. With pipelined updates (DrawingAreaWC::canPipelineRenderingUpdate) two can be,
+    // and the stages after the web one are then approximate; the cycle is kept per update.
     std::atomic<uint64_t> updateStartUs { 0 };
     std::atomic<uint64_t> fenceDoneUs { 0 };
     std::atomic<uint64_t> compositorSentUs { 0 };
@@ -93,6 +149,8 @@ public:
     std::atomic<uint64_t> updates { 0 };
     std::atomic<uint64_t> deferredTriggers { 0 };   // render requests made while an update was still in flight
     std::atomic<uint64_t> compositedUpdates { 0 };  // accelerated-compositing updates (vs. painting the whole view)
+    std::atomic<uint64_t> pipelinedUpdates { 0 };   // updates started while the previous one was still in flight
+    std::atomic<uint64_t> smallLayerTiles { 0 };    // small layers' tiles drawn on the processor despite GLASS_GPU_RASTER
     Duration web;          // main thread: updateRendering() (style, layout, paint recording, layer flush)
     Duration page;         //   of which the page's update: rAF callbacks and other script, style, layout
     Duration flush;        //   of which finalizing: compositing layer flush and paint recording
@@ -127,10 +185,11 @@ public:
         auto window = (nowUs - m_lastReportUs) / 1000.0;
         m_lastReportUs = nowUs;
         if (auto* file = openLog()) {
-            std::fprintf(file, "+%.1fs window=%.0fms updates=%llu composited=%llu deferredTriggers=%llu cycle avg=%.1f max=%.1fms web avg=%.1f max=%.1fms (page avg=%.1f max=%.1fms flush avg=%.1f max=%.1fms) gpuPaint avg=%.1f max=%.1fms hop avg=%.1f max=%.1fms compositor avg=%.1f max=%.1fms ui avg=%.1f max=%.1fms (toUI avg=%.1f max=%.1fms back avg=%.1f max=%.1fms)\n",
+            std::fprintf(file, "+%.1fs window=%.0fms updates=%llu composited=%llu deferredTriggers=%llu pipelined=%llu smallLayerTiles=%llu cycle avg=%.1f max=%.1fms web avg=%.1f max=%.1fms (page avg=%.1f max=%.1fms flush avg=%.1f max=%.1fms) gpuPaint avg=%.1f max=%.1fms hop avg=%.1f max=%.1fms compositor avg=%.1f max=%.1fms ui avg=%.1f max=%.1fms (toUI avg=%.1f max=%.1fms back avg=%.1f max=%.1fms)\n",
                 (nowUs - m_createdUs) / 1000000.0, window,
                 static_cast<unsigned long long>(updates.exchange(0)), static_cast<unsigned long long>(compositedUpdates.exchange(0)),
-                static_cast<unsigned long long>(deferredTriggers.exchange(0)),
+                static_cast<unsigned long long>(deferredTriggers.exchange(0)), static_cast<unsigned long long>(pipelinedUpdates.exchange(0)),
+                static_cast<unsigned long long>(smallLayerTiles.exchange(0)),
                 cycleAvg, cycleMax, webAvg, webMax, pageAvg, pageMax, flushAvg, flushMax, paintAvg, paintMax, hopAvg, hopMax, compAvg, compMax, uiAvg, uiMax, uiHandleAvg, uiHandleMax, uiReturnAvg, uiReturnMax);
             std::fflush(file);
         }
@@ -138,6 +197,17 @@ public:
 
 private:
     RenderingUpdateStats() = default;
+
+    struct Watch {
+        std::atomic<Stage> stage { Stage::Idle };
+        std::atomic<uint64_t> since { 0 };
+        std::atomic<uint64_t> mainRan { 0 };
+    };
+    static Watch& watch()
+    {
+        static Watch state;
+        return state;
+    }
 
     // Times in the log count from the first page's stats, so the per-second lines and large repaints line up.
     static uint64_t processStartUs()

@@ -89,6 +89,11 @@ public:
     IPC::MessageReceiverMap& messageReceiverMap() LIFETIME_BOUND { return m_messageReceiverMap; }
 
     void didBecomeUnresponsive();
+#if OS(WINDOWS)
+    // Glass: closed as if the GPU process had gone, unless a GPU process has taken it (DidInitialize). See
+    // WebProcess::ensureGPUProcessConnection.
+    void closeIfNotInitialized();
+#endif
 #if HAVE(AUDIT_TOKEN)
     std::optional<audit_token_t> auditToken();
 #endif

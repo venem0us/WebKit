@@ -27,6 +27,10 @@
 #include <string>
 #include <wtf/MonotonicTime.h>
 
+#if USE(SKIA)
+#include <WebCore/D3D11SharedTexture.h>
+#endif
+
 namespace WebKit {
 
 // Opt-in counters for the GPU process's drawing on Windows (WEBKIT_GST_VIDEO_STATS=1, the same switch as the video
@@ -114,6 +118,35 @@ public:
     // Video frames left on the GPU (WCScene): textures opened, shown, skipped for a newer one, and what went wrong.
     std::atomic<uint64_t> textureImports { 0 }, textureImportFailures { 0 }, texturesShown { 0 }, texturesSkipped { 0 }, texturesMissing { 0 }, textureAcquireTimeouts { 0 }, texturesNotShown { 0 }, texturesReleasedWithLayer { 0 };
     std::atomic<uint64_t> resizePresents { 0 }; // second presents after ANGLE resized a window's buffers (WCScene::present)
+    // Layer tiles drawn on the GPU (GLASS_GPU_RASTER) and copied from their texture, and those whose texture wasn't found.
+    std::atomic<uint64_t> gpuTiles { 0 }, gpuTileFallbacks { 0 }, gpuTilesMissing { 0 };
+    // Accelerated image buffers made on the GPU, and those that fell back to a bitmap (D3D11SharedTextures::lastFailure).
+    std::atomic<uint64_t> gpuBuffers { 0 }, gpuBufferFailures { 0 }, gpuBuffersReused { 0 };
+    // Scene diagnostics: updates naming layers the scene doesn't have, layers whose tiles were dropped (no backing store),
+    // and tiles whose first update didn't cover them (the rest of the tile has nothing until it is repainted).
+    std::atomic<uint64_t> unknownLayers { 0 }, droppedBackingStores { 0 }, partialNewTiles { 0 };
+
+    // Direct3D removed the device: this process ends right after, so that a new one, on a new device, takes over.
+    void noteDeviceRemoved(long reason, bool simulated)
+    {
+        if (auto* file = openLog()) {
+            std::fprintf(file, "device removed (0x%08lx%s): ending the GPU process for a new one\n", static_cast<unsigned long>(reason), simulated ? ", simulated" : "");
+            std::fflush(file);
+        }
+    }
+
+    // The latest reason an accelerated buffer couldn't be made on the GPU, reported once per reason change.
+    void noteGPUBufferFailure(const char* reason)
+    {
+        std::lock_guard lock(m_failureLock);
+        if (reason == m_lastFailure)
+            return;
+        m_lastFailure = reason;
+        if (auto* file = openLog()) {
+            std::fprintf(file, "gpu buffer fallback: %s\n", reason ? reason : "?");
+            std::fflush(file);
+        }
+    }
 
     void noteLargeDraw(int sourceWidth, int sourceHeight, float sourceRectWidth, float sourceRectHeight, float destWidth, float destHeight, float ctmScale, bool accelerated, int quality, float clipWidth, float clipHeight)
     {
@@ -156,7 +189,7 @@ public:
             draw = m_lastDraw;
         }
         if (auto* file = openLog()) {
-            std::fprintf(file, "+%.1fs window=%.0fms fences=%llu receive n=%llu total=%.1fms avg=%.2f max=%.1fms bytes=%.1fMB drawLarge n=%llu total=%.1fms avg=%.2f max=%.1fms drawSmall n=%llu total=%.1fms max=%.1fms flushTile n=%llu total=%.1fms avg=%.2f max=%.1fms lastLarge src=%dx%d srcRect=%.0fx%.0f dest=%.0fx%.0f ctmScale=%.2f accelerated=%d quality=%d clip=%.0fx%.0f videoUpload n=%llu avg=%.2f max=%.1fms composite n=%llu avg=%.2f max=%.1fms paint n=%llu avg=%.2f max=%.1fms present n=%llu avg=%.2f max=%.1fms filter n=%llu total=%.1f max=%.1fms imageBuffer n=%llu total=%.1f max=%.1fms layer n=%llu total=%.1f max=%.1fms fill n=%llu total=%.1f max=%.1fms displayList n=%llu total=%.1f max=%.1fms createBuffer n=%llu total=%.1f max=%.1fms textures import=%llu importFail=%llu shown=%llu skipped=%llu missing=%llu acquireTimeout=%llu notShown=%llu releasedWithLayer=%llu resizePresents=%llu\n",
+            std::fprintf(file, "+%.1fs window=%.0fms fences=%llu receive n=%llu total=%.1fms avg=%.2f max=%.1fms bytes=%.1fMB drawLarge n=%llu total=%.1fms avg=%.2f max=%.1fms drawSmall n=%llu total=%.1fms max=%.1fms flushTile n=%llu total=%.1fms avg=%.2f max=%.1fms lastLarge src=%dx%d srcRect=%.0fx%.0f dest=%.0fx%.0f ctmScale=%.2f accelerated=%d quality=%d clip=%.0fx%.0f videoUpload n=%llu avg=%.2f max=%.1fms composite n=%llu avg=%.2f max=%.1fms paint n=%llu avg=%.2f max=%.1fms present n=%llu avg=%.2f max=%.1fms filter n=%llu total=%.1f max=%.1fms imageBuffer n=%llu total=%.1f max=%.1fms layer n=%llu total=%.1f max=%.1fms fill n=%llu total=%.1f max=%.1fms displayList n=%llu total=%.1f max=%.1fms createBuffer n=%llu total=%.1f max=%.1fms textures import=%llu importFail=%llu shown=%llu skipped=%llu missing=%llu acquireTimeout=%llu notShown=%llu releasedWithLayer=%llu resizePresents=%llu gpuTiles=%llu gpuTileFallbacks=%llu gpuTilesMissing=%llu gpuBuffers=%llu gpuBufferFailures=%llu gpuBuffersReused=%llu unknownLayers=%llu droppedBackingStores=%llu partialNewTiles=%llu",
                 (nowUs - m_createdUs) / 1000000.0, (nowUs - last) / 1000.0,
                 static_cast<unsigned long long>(flushes.exchange(0)),
                 static_cast<unsigned long long>(receives), receiveTotal, receiveAvg, receiveMax, receivedBytes.exchange(0) / 1048576.0,
@@ -170,7 +203,14 @@ public:
                 static_cast<unsigned long long>(layers), layerTotal, layerMax, static_cast<unsigned long long>(fills), fillTotal, fillMax,
                 static_cast<unsigned long long>(lists), listTotal, listMax, static_cast<unsigned long long>(creates), createTotal, createMax,
                 static_cast<unsigned long long>(textureImports.exchange(0)), static_cast<unsigned long long>(textureImportFailures.exchange(0)), static_cast<unsigned long long>(texturesShown.exchange(0)), static_cast<unsigned long long>(texturesSkipped.exchange(0)),
-                static_cast<unsigned long long>(texturesMissing.exchange(0)), static_cast<unsigned long long>(textureAcquireTimeouts.exchange(0)), static_cast<unsigned long long>(texturesNotShown.exchange(0)), static_cast<unsigned long long>(texturesReleasedWithLayer.exchange(0)), static_cast<unsigned long long>(resizePresents.exchange(0)));
+                static_cast<unsigned long long>(texturesMissing.exchange(0)), static_cast<unsigned long long>(textureAcquireTimeouts.exchange(0)), static_cast<unsigned long long>(texturesNotShown.exchange(0)), static_cast<unsigned long long>(texturesReleasedWithLayer.exchange(0)), static_cast<unsigned long long>(resizePresents.exchange(0)), static_cast<unsigned long long>(gpuTiles.exchange(0)), static_cast<unsigned long long>(gpuTileFallbacks.exchange(0)), static_cast<unsigned long long>(gpuTilesMissing.exchange(0)), static_cast<unsigned long long>(gpuBuffers.exchange(0)), static_cast<unsigned long long>(gpuBufferFailures.exchange(0)), static_cast<unsigned long long>(gpuBuffersReused.exchange(0)), static_cast<unsigned long long>(unknownLayers.exchange(0)), static_cast<unsigned long long>(droppedBackingStores.exchange(0)), static_cast<unsigned long long>(partialNewTiles.exchange(0)));
+#if USE(SKIA)
+            // GPU raster's textures (GLASS_GPU_RASTER): now, the most during the window, the budget, the drawing
+            // threads' EGL images still alive, what their pools hold and their Skia caches.
+            auto memory = WebCore::D3D11SharedTextures::takeMemoryUse();
+            std::fprintf(file, " gpuMemory=%.1fMB gpuMemoryPeak=%.1fMB gpuMemoryBudget=%.0fMB gpuImages=%llu gpuPooled=%.1fMB skiaCache=%.1fMB", memory.bytes / 1048576.0, memory.peakBytes / 1048576.0, memory.budgetBytes / 1048576.0, static_cast<unsigned long long>(memory.images), memory.pooledBytes / 1048576.0, memory.skiaCacheBytes / 1048576.0);
+#endif
+            std::fputc('\n', file);
             std::fflush(file);
         }
     }
@@ -221,6 +261,8 @@ private:
     uint64_t m_createdUs { now() };
     std::atomic<uint64_t> m_lastReportUs { 0 };
     std::mutex m_lastDrawLock;
+    std::mutex m_failureLock;
+    const char* m_lastFailure { nullptr };
     LastDraw m_lastDraw;
 };
 

@@ -59,6 +59,11 @@ public:
     // (UpdateVideoFrame), or null where that's not possible (offscreen rendering, or turned off).
     RefPtr<WebCore::MediaPlayerCompositorFrameSink> createVideoFrameSink(WebCore::PlatformLayerIdentifier layer);
 #endif
+#if OS(WINDOWS)
+    // Glass: called (on the main thread) when the GPU process this layer tree was in has gone. The next update starts a
+    // new one, with an empty scene. With the identifier of the connection that closed.
+    void setGPUProcessDidCloseHandler(Function<void(GPUProcessConnectionIdentifier)>&& handler) { m_gpuProcessDidCloseHandler = WTF::move(handler); }
+#endif
 
     WTF_ABSTRACT_THREAD_SAFE_REF_COUNTED_AND_CAN_MAKE_WEAK_PTR_IMPL;
 
@@ -78,6 +83,9 @@ private:
     WCLayerTreeHostIdentifier m_wcLayerTreeHostIdentifier { WCLayerTreeHostIdentifier::generate() };
     WeakRef<WebPage> m_page;
     bool m_usesOffscreenRendering { false };
+#if OS(WINDOWS)
+    Function<void(GPUProcessConnectionIdentifier)> m_gpuProcessDidCloseHandler;
+#endif
 };
 
 } // namespace WebKit

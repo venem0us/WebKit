@@ -80,6 +80,24 @@ void TextureMapperSparseBackingStore::updateContents(const TileIndex& index, Nat
     addResult.iterator->value->updateContents(image, dirtyRect);
 }
 
+bool TextureMapperSparseBackingStore::updateContentsFromTexture(const TileIndex& index, unsigned sourceTextureID, const IntRect& dirtyRect)
+{
+    // A tile is the web process's whole grid cell (WCTileGrid: 512x512, clipped to the layer), not the first dirty
+    // rect it got: when that was only part of the cell, later updates of the rest were cut off (or, copied from a
+    // texture, failed BitmapTexture's bounds check). A tile made otherwise (an older update) is made again.
+    static constexpr int tileSize = 512;
+    IntRect cell { index.x() * tileSize, index.y() * tileSize, tileSize, tileSize };
+    cell.intersect({ { }, m_size });
+    if (cell.isEmpty() || !cell.contains(dirtyRect))
+        return false;
+    auto& tile = m_tiles.ensure(index, [&]() {
+        return makeUnique<TextureMapperTile>(cell);
+    }).iterator->value;
+    if (enclosingIntRect(tile->rect()) != cell)
+        tile = makeUnique<TextureMapperTile>(cell);
+    return tile->updateContentsFromTexture(sourceTextureID, dirtyRect);
+}
+
 void TextureMapperSparseBackingStore::removeTile(const TileIndex& index)
 {
     m_tiles.remove(index);

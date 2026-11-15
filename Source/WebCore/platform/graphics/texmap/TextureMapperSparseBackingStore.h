@@ -47,7 +47,11 @@ public:
     WEBCORE_EXPORT void drawBorder(TextureMapper&, const Color&, float borderWidth, const FloatRect&, const TransformationMatrix&) override;
     WEBCORE_EXPORT void drawRepaintCounter(TextureMapper&, int repaintCount, const Color&, const FloatRect&, const TransformationMatrix&) override;
     WEBCORE_EXPORT void updateContents(const TileIndex&, NativeImage&, const IntRect& dirtyRect);
+    // From a GL texture holding the dirty rect's pixels at its origin (a buffer drawn on the GPU): copied on the GPU.
+    // False if the update doesn't fit the tile it names (the caller can upload it another way).
+    WEBCORE_EXPORT bool updateContentsFromTexture(const TileIndex&, unsigned sourceTextureID, const IntRect& dirtyRect);
     WEBCORE_EXPORT void removeTile(const TileIndex&);
+    bool hasTile(const TileIndex& index) const { return m_tiles.contains(index); }
 
 private:
     TransformationMatrix adjustedTransformForRect(const FloatRect&);

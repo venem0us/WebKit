@@ -146,6 +146,14 @@ void Recorder::commitStateChanges(GraphicsContextState::ChangeFlags changes)
     m_state.didApplyChanges();
 }
 
+#if PLATFORM(WIN)
+void Recorder::forgetCommittedState()
+{
+    m_committedState = GraphicsContextState { };
+    m_state.markChanged(GraphicsContextState::ChangeFlags::all());
+}
+#endif
+
 bool Recorder::updateStateForTranslate(float x, float y)
 {
     if (!x && !y)

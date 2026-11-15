@@ -24,6 +24,7 @@
 
 class WebKit::WCBackingStore {
     std::optional<WebKit::ImageBufferBackendHandle> handle();
+    std::optional<WebCore::RenderingResourceIdentifier> acceleratedBufferIdentifier();
 }
 
 #endif

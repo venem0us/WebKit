@@ -54,6 +54,7 @@
 #include <wtf/Borrow.h>
 #include <wtf/StdLibExtras.h>
 #include <wtf/text/TextStream.h>
+#include <wtf/TZoneMallocInlines.h>
 
 #if HAVE(IOSURFACE)
 #include "ImageBufferRemoteIOSurfaceBackend.h"
@@ -126,6 +127,9 @@ void RemoteRenderingBackendProxy::ensureGPUProcessConnection()
         gpuProcessConnection->createRenderingBackend(m_identifier, WTF::move(serverHandle));
         m_gpuProcessConnection = gpuProcessConnection.get();
         m_gpuProcessIPCConnection = &gpuProcessConnection->connection();
+#if USE(GRAPHICS_LAYER_WC)
+        m_streamGPUProcessConnection = gpuProcessConnection->identifier();
+#endif
         m_sharedResourceCache = gpuProcessConnection->sharedResourceCache();
     });
 }
@@ -193,8 +197,29 @@ void RemoteRenderingBackendProxy::gpuProcessConnectionDidClose(IPC::Connection& 
     gpuProcessConnectionDidClose();
 }
 
-void RemoteRenderingBackendProxy::didClose(IPC::Connection&)
+#if USE(GRAPHICS_LAYER_WC)
+void RemoteRenderingBackendProxy::gpuProcessDidClose(GPUProcessConnectionIdentifier gone)
 {
+    // Glass: the GPU process connection has reported the GPU process gone. This stream's own close can come many seconds
+    // later (25 s on the test VM), while the page's rendering waits on it; act on it now. Unless the stream's close came
+    // first and this proxy is already in the next GPU process: recreating its backend there a second time is an invalid
+    // message, for which that GPU process has this web process terminated.
+    if (m_streamGPUProcessConnection != gone)
+        return;
+    if (RefPtr connection = m_connection)
+        didClose(connection->connectionForTesting());
+}
+#endif
+
+void RemoteRenderingBackendProxy::didClose(IPC::Connection& connection)
+{
+#if USE(GRAPHICS_LAYER_WC)
+    // A late close of a stream already replaced (gpuProcessDidClose) isn't this one's.
+    if (!m_connection || &connection != &m_connection->connectionForTesting())
+        return;
+#else
+    UNUSED_PARAM(connection);
+#endif
     gpuProcessConnectionDidClose();
 }
 
@@ -277,7 +302,80 @@ void RemoteRenderingBackendProxy::disconnectGPUProcess()
     m_isResponsive = false;
     m_gpuProcessConnection = nullptr;
     m_gpuProcessIPCConnection = nullptr;
+#if USE(GRAPHICS_LAYER_WC)
+    // Fences still waiting on the gone GPU process give up now (see flushImageBuffers); later ones get a new flag.
+    m_connectionLost->store(true);
+    m_connectionLost = std::make_shared<std::atomic<bool>>(false);
+    m_streamGPUProcessConnection = std::nullopt;
+#endif
 }
+
+#if USE(SKIA) && PLATFORM(WIN)
+static std::atomic<unsigned> gpuProcessLosses;
+
+bool RemoteRenderingBackendProxy::gpuRasterEnabled(RenderingPurpose purpose)
+{
+    static const char* value = getenv("GLASS_GPU_RASTER");
+    if (!value || gpuProcessLosses >= 2)
+        return false;
+    if (!strcmp(value, "tiles"))
+        return purpose == RenderingPurpose::DOM;
+    return !strcmp(value, "1");
+}
+
+bool RemoteRenderingBackendProxy::noteGPUProcessLost()
+{
+    // Each page hears of the same loss: count one per second at most.
+    static MonotonicTime lastLoss;
+    auto now = MonotonicTime::now();
+    if (now - lastLoss >= 1_s) {
+        lastLoss = now;
+        if (++gpuProcessLosses == 2)
+            WTFLogAlways("Glass: the GPU process has gone twice; this web process draws on the processor from now on");
+    }
+    return getenv("GLASS_GPU_RASTER") && gpuProcessLosses >= 2;
+}
+
+// GLASS_GPU_RASTER=1 (or =tiles, layer tiles only, canvas stays on the processor): an accelerated buffer's pixels live on
+// the GPU, in the GPU process (a texture the compositor reads there), so this process holds no backing store and has no
+// handle to give; everything goes through the proxy.
+class ImageBufferRemoteGPUTextureBackend final : public WebCore::ImageBufferBackend {
+    WTF_MAKE_TZONE_ALLOCATED_INLINE(ImageBufferRemoteGPUTextureBackend);
+public:
+    static bool enabled(RenderingPurpose purpose) { return RemoteRenderingBackendProxy::gpuRasterEnabled(purpose); }
+    static IntSize calculateSafeBackendSize(const ImageBufferParameters& parameters) { return ImageBufferBackend::calculateSafeBackendSize(parameters); }
+    static std::unique_ptr<ImageBufferRemoteGPUTextureBackend> create(const ImageBufferParameters& parameters) { return std::unique_ptr<ImageBufferRemoteGPUTextureBackend>(new ImageBufferRemoteGPUTextureBackend(parameters)); }
+
+    RenderingMode renderingMode() const final { return RenderingMode::Accelerated; }
+    bool canMapBackingStore() const final { return false; }
+
+private:
+    explicit ImageBufferRemoteGPUTextureBackend(const ImageBufferParameters& parameters)
+        : ImageBufferBackend(parameters)
+    {
+    }
+
+    unsigned bytesPerRow() const final { return 4 * size().width(); }
+    GraphicsContext& context() final
+    {
+        RELEASE_ASSERT_NOT_REACHED();
+        return *(GraphicsContext*)nullptr;
+    }
+    RefPtr<NativeImage> copyNativeImage() final
+    {
+        RELEASE_ASSERT_NOT_REACHED();
+        return nullptr;
+    }
+    RefPtr<NativeImage> createNativeImageReference() final
+    {
+        RELEASE_ASSERT_NOT_REACHED();
+        return nullptr;
+    }
+    void getPixelBuffer(const IntRect&, PixelBuffer&) final { RELEASE_ASSERT_NOT_REACHED(); }
+    void putPixelBuffer(const PixelBufferSourceView&, const IntRect&, const IntPoint&, AlphaPremultiplication) final { RELEASE_ASSERT_NOT_REACHED(); }
+    String debugDescription() const final { return "ImageBufferRemoteGPUTextureBackend"_s; }
+};
+#endif
 
 RefPtr<RemoteImageBufferProxy> RemoteRenderingBackendProxy::createImageBuffer(const FloatSize& size, RenderingMode renderingMode, RenderingPurpose purpose, float resolutionScale, const ColorSpace& colorSpace, ImageBufferFormat bufferFormat)
 {
@@ -292,6 +390,10 @@ RefPtr<RemoteImageBufferProxy> RemoteRenderingBackendProxy::createImageBuffer(co
     case RenderingMode::Accelerated:
 #if HAVE(IOSURFACE)
         imageBuffer = RemoteImageBufferProxy::create<ImageBufferRemoteIOSurfaceBackend>(parameters, *this);
+#endif
+#if USE(SKIA) && PLATFORM(WIN)
+        if (!imageBuffer && ImageBufferRemoteGPUTextureBackend::enabled(purpose))
+            imageBuffer = RemoteImageBufferProxy::create<ImageBufferRemoteGPUTextureBackend>(parameters, *this);
 #endif
         [[fallthrough]];
 
@@ -810,8 +912,17 @@ Function<bool()> RemoteRenderingBackendProxy::flushImageBuffers()
             return false;
         };
     }
-    return [flushSemaphore = WTF::move(flushSemaphore), timeoutDuration = m_connection->defaultTimeoutDuration()]() mutable {
-        return flushSemaphore.waitFor(timeoutDuration);
+    // Glass: waited for in slices, so that a GPU process that has gone (crashed, or ended after a graphics driver reset)
+    // ends the wait at once instead of after the whole timeout (15 s), with the page's rendering stopped meanwhile.
+    return [flushSemaphore = WTF::move(flushSemaphore), timeoutDuration = m_connection->defaultTimeoutDuration(), lost = m_connectionLost]() mutable {
+        constexpr Seconds slice = 100_ms;
+        for (Seconds waited; waited < timeoutDuration; waited += slice) {
+            if (flushSemaphore.waitFor(std::min(slice, timeoutDuration - waited)))
+                return true;
+            if (lost->load())
+                return false;
+        }
+        return false;
     };
 }
 

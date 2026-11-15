@@ -22,6 +22,7 @@
 #include "BitmapTexture.h"
 #include "NativeImage.h"
 #include "TextureMapper.h"
+#include "TextureMapperGLHeaders.h"
 #include <wtf/TZoneMallocInlines.h>
 
 namespace WebCore {
@@ -68,6 +69,53 @@ void TextureMapperTile::updateContents(NativeImage& image, const IntRect& dirtyR
     }
 
     m_texture->updateContents(&image, targetRect, sourceOffset);
+}
+
+static void clearTexture(BitmapTexture& texture)
+{
+    GLint boundFramebuffer = 0;
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &boundFramebuffer);
+    GLboolean scissorEnabled = glIsEnabled(GL_SCISSOR_TEST);
+    GLfloat clearColor[4];
+    glGetFloatv(GL_COLOR_CLEAR_VALUE, clearColor);
+
+    GLuint framebuffer = 0;
+    glGenFramebuffers(1, &framebuffer);
+    glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture.id(), 0);
+    if (scissorEnabled)
+        glDisable(GL_SCISSOR_TEST);
+    glClearColor(0, 0, 0, 0);
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    glClearColor(clearColor[0], clearColor[1], clearColor[2], clearColor[3]);
+    if (scissorEnabled)
+        glEnable(GL_SCISSOR_TEST);
+    glBindFramebuffer(GL_FRAMEBUFFER, boundFramebuffer);
+    glDeleteFramebuffers(1, &framebuffer);
+}
+
+bool TextureMapperTile::updateContentsFromTexture(unsigned sourceTextureID, const IntRect& dirtyRect)
+{
+    IntRect tileRect = enclosingIntRect(m_rect);
+    IntRect targetRect = intersection(tileRect, dirtyRect);
+    if (targetRect.isEmpty())
+        return true;
+    IntPoint sourceOffset = targetRect.location();
+    sourceOffset.move(-dirtyRect.x(), -dirtyRect.y());
+    targetRect.move(-m_rect.x(), -m_rect.y());
+    // The texture covers the whole tile, so updates of any part of it fit. A new texture's memory is undefined (it can
+    // hold another texture's old pixels), so one the update doesn't cover entirely starts transparent.
+    if (!m_texture || m_texture->size() != tileRect.size()) {
+        m_texture = BitmapTexture::create(tileRect.size(), BitmapTexture::Flags::SupportsAlpha);
+        if (targetRect != IntRect { { }, tileRect.size() })
+            clearTexture(*m_texture);
+    }
+    // copyFromExternalTexture's release assertion bounds the source offset by this texture's size; never reach it.
+    if (sourceOffset.x() + targetRect.width() > m_texture->size().width() || sourceOffset.y() + targetRect.height() > m_texture->size().height())
+        return false;
+    m_texture->copyFromExternalTexture(sourceTextureID, targetRect, toIntSize(sourceOffset));
+    return true;
 }
 
 void TextureMapperTile::updateContents(GraphicsLayer* sourceLayer, const IntRect& dirtyRect, float scale)

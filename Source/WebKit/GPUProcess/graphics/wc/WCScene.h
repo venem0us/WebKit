@@ -30,9 +30,11 @@
 #include "UpdateInfo.h"
 #include <WebCore/GraphicsLayer.h>
 #include <WebCore/ProcessIdentifier.h>
+#include <WebCore/RenderingResourceIdentifier.h>
 #include <WebCore/TextureMapperFPSCounter.h>
 #include <wtf/Forward.h>
 #include <wtf/HashMap.h>
+#include <wtf/MonotonicTime.h>
 #include <wtf/TZoneMalloc.h>
 #if OS(WINDOWS)
 #include <wtf/win/Win32Handle.h>
@@ -43,6 +45,7 @@ class ShareableBitmap;
 class TextureMapper;
 class TextureMapperLayer;
 class TextureMapperPlatformLayer;
+class TextureMapperSparseBackingStore;
 class TextureMapperTiledBackingStore;
 }
 
@@ -75,6 +78,16 @@ public:
     void skipVideoTexture(uint64_t texture);
     // Paints and presents the scene again as the last update left it (see RemoteWCLayerTreeHost::update).
     void presentAgain();
+#endif
+
+private:
+#if OS(WINDOWS)
+    bool updateTileFromGPUBuffer(WebCore::TextureMapperSparseBackingStore&, const WebCore::IntPoint& index, WebCore::RenderingResourceIdentifier, const WebCore::IntRect& dirtyRect);
+    void dropUnusedGPUBufferTextures(MonotonicTime now);
+    void clearWindowBackground();
+    struct GPUBufferTexture;
+    HashMap<void*, std::unique_ptr<GPUBufferTexture>> m_gpuBufferTextures;
+    MonotonicTime m_lastGPUBufferTextureSweep;
 #endif
 
 private:

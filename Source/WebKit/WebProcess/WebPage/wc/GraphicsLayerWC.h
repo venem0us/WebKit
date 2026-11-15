@@ -45,7 +45,8 @@ public:
         virtual void graphicsLayerAdded(GraphicsLayerWC&) = 0;
         virtual void graphicsLayerRemoved(GraphicsLayerWC&) = 0;
         virtual void commitLayerUpdateInfo(WCLayerUpdateInfo&&) = 0;
-        virtual RefPtr<WebCore::ImageBuffer> createImageBuffer(WebCore::FloatSize, float deviceScaleFactor) = 0;
+        // A tile's image buffer, for a layer of layerSize.
+        virtual RefPtr<WebCore::ImageBuffer> createImageBuffer(WebCore::FloatSize, float deviceScaleFactor, WebCore::FloatSize layerSize) = 0;
 #if ENABLE(VIDEO) && OS(WINDOWS)
         // Where a video in this layer can send its frames straight to the compositor, if anywhere.
         virtual RefPtr<WebCore::MediaPlayerCompositorFrameSink> createVideoFrameSink(WebCore::PlatformLayerIdentifier) { return nullptr; }
@@ -56,6 +57,10 @@ public:
     ~GraphicsLayerWC() override;
 
     void clearObserver() { m_observer = nullptr; }
+#if OS(WINDOWS)
+    // Glass: the next commit describes this layer whole, its tiles painted anew, for a new GPU process's empty scene.
+    void resyncWithNewCompositor();
+#endif
 
     // GraphicsLayer
     NODELETE std::optional<WebCore::PlatformLayerIdentifier> primaryLayerID() const override;
