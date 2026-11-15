@@ -261,6 +261,11 @@ WK_EXPORT void WKPageGetSelectionAsWebArchiveData(WKPageRef page, void* context,
 typedef void (*WKPageForceRepaintFunction)(WKErrorRef, void*);
 WK_EXPORT void WKPageForceRepaint(WKPageRef page, void* context, WKPageForceRepaintFunction function);
 
+// Glass: part of the visible page painted by the web process into a bitmap (composited layers included, whatever is or
+// isn't on screen). rect is in view coordinates; the callback gets BGRA premultiplied pixels, or null if it failed.
+typedef void (*WKPageSnapshotFunction)(const void* pixels, int width, int height, int bytesPerRow, void* context);
+WK_EXPORT void WKPageTakeSnapshot(WKPageRef page, WKRect rect, int pixelWidth, int pixelHeight, void* context, WKPageSnapshotFunction function);
+
 /*
     Some of the more common command name strings include the following, although any WebCore EditorCommand string is supported:
     
