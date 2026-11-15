@@ -716,6 +716,9 @@ private:
     // The image of m_lastPaintedSample (main thread only). A video spanning several tiles is painted once per tile;
     // reusing one image converts and copies each frame once, and lets the GPU process cache it once.
     RefPtr<NativeImage> m_lastPaintedImage;
+    // The sample m_lastPaintedImage was made from. Frames that go to the compositor from the sink thread also update
+    // m_lastPaintedSample, so it can't tell whether the cached image is current (main thread only).
+    GRefPtr<GstSample> m_lastPaintedImageSample;
     // The sample paint() draws, latched by repaint() on the main thread. Frames keep arriving while a page update
     // paints its tiles one after another; drawing m_sample directly could show a different frame in each tile.
     GRefPtr<GstSample> m_sampleForPaint WTF_GUARDED_BY_LOCK(m_sampleMutex);

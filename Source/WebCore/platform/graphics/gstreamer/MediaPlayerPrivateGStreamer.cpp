@@ -4758,7 +4758,10 @@ RefPtr<NativeImage> MediaPlayerPrivateGStreamer::presentedImage(bool isPainting)
         Locker sampleLocker { m_sampleMutex };
         if (!GST_IS_SAMPLE(m_sample.get()))
             return nullptr;
-        sample = GST_IS_SAMPLE(m_sampleForPaint.get()) ? m_sampleForPaint : m_sample;
+        // While frames go to the compositor from the sink thread, repaint() no longer runs for each frame, so
+        // m_sampleForPaint stays on an old one: a canvas drawing the video (drawImage, WebGL, createImageBitmap)
+        // kept getting that frame. The element isn't painted in tiles then, so the newest frame is the right one.
+        sample = (m_framesGoToCompositor || !GST_IS_SAMPLE(m_sampleForPaint.get())) ? m_sample : m_sampleForPaint;
     }
     if (!GST_IS_BUFFER(gst_sample_get_buffer(sample.get())))
         return nullptr;
@@ -4797,8 +4800,10 @@ RefPtr<NativeImage> MediaPlayerPrivateGStreamer::presentedImage(bool isPainting)
         GStreamerVideoStats::reportIfDue(innermostVideoSink(m_videoSink.get()));
     }
 
-    RefPtr image = isNewFrame ? nullptr : m_lastPaintedImage;
+    // Keyed on the sample, not the buffer: pooled buffers are reused for later frames.
+    RefPtr image = m_lastPaintedImageSample == sample ? m_lastPaintedImage : nullptr;
     if (!image) {
+        m_lastPaintedImageSample = sample;
         Ref frame = VideoFrameGStreamer::create(WTF::move(sample), { IntSize(*presentationSize), { *m_videoInfo } });
         image = frame->copyNativeImage();
         m_lastPaintedImage = image;
