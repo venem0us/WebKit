@@ -73,6 +73,8 @@ public:
     bool importVideoTexture(WebCore::PlatformLayerIdentifier, uint64_t texture, const WebCore::IntSize&, WTF::Win32Handle&&);
     bool updateVideoTexture(WebCore::PlatformLayerIdentifier, uint64_t texture);
     void skipVideoTexture(uint64_t texture);
+    // Paints and presents the scene again as the last update left it (see RemoteWCLayerTreeHost::update).
+    void presentAgain();
 #endif
 
 private:

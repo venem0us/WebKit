@@ -107,6 +107,18 @@ private:
     };
     void scheduleVideoFrameDrain() WTF_REQUIRES_LOCK(m_videoFrames->lock);
     Ref<VideoFrameMailbox> m_videoFrames { adoptRef(*new VideoFrameMailbox) };
+
+    // Presents the scene again shortly after an update sent while the page's window was hidden or just shown (see
+    // update()). The timers hold this state, not the host: the host clears it when destroyed.
+    struct ShownPresents : RefCounted<ShownPresents> {
+        RemoteWCLayerTreeHost* host { nullptr };
+        bool scheduled { false };
+    };
+    void scheduleShownPresents();
+    uint64_t m_nativeWindow { 0 };
+    bool m_windowWasVisible { false };
+    MonotonicTime m_lastUpdateTime;
+    Ref<ShownPresents> m_shownPresents { adoptRef(*new ShownPresents) };
 #endif
 };
 
