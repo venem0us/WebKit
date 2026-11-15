@@ -48,8 +48,23 @@ typedef uint64_t pas_expendable_memory_state_version;
 struct pas_expendable_memory {
     unsigned bump;
     unsigned size;
+    /* Glass: how much of the payload, from its start, is committed. Everything at and above it has never been
+       allocated (allocation only moves bump up) and, on Windows, is left uncommitted until bump gets there: see
+       pas_expendable_memory_decommit_unallocated. Equal to size wherever that isn't done. */
+    unsigned committed;
     pas_expendable_memory_state states[1];
 };
+
+/* Glass: on Windows the part of an expendable memory nothing has been allocated from yet is not committed. Windows
+   charges committed memory to the process whether it is touched or not, and every WebKit process and the browser
+   had 20 MB (compact) plus 8 MB (large) committed here with well under 1 MB of it in use. */
+#if PAS_OS(WINDOWS)
+#define PAS_EXPENDABLE_MEMORY_COMMITS_LAZILY 1
+#else
+#define PAS_EXPENDABLE_MEMORY_COMMITS_LAZILY 0
+#endif
+/* Committed this much at a time as allocation advances, to keep the number of system calls down. */
+#define PAS_EXPENDABLE_MEMORY_COMMIT_WINDOW ((size_t)256 * 1024)
 
 #define PAS_EXPENDABLE_MEMORY_PAGE_SIZE 16384llu
 
@@ -122,6 +137,11 @@ static inline pas_expendable_memory_state pas_expendable_memory_state_with_versi
 
 PAS_API void pas_expendable_memory_construct(pas_expendable_memory* memory,
                                              size_t size);
+
+/* Glass: call right after pas_expendable_memory_construct, with the payload still untouched and committed. Where
+   PAS_EXPENDABLE_MEMORY_COMMITS_LAZILY, gives the payload's commit charge back; allocation commits it again piece by
+   piece. Does nothing elsewhere. The payload must start and end on system page boundaries. */
+PAS_API void pas_expendable_memory_decommit_unallocated(pas_expendable_memory* header, void* payload);
 
 PAS_API void* pas_expendable_memory_try_allocate(pas_expendable_memory* header,
                                                  void* payload,

@@ -52,6 +52,7 @@ static void allocate_new_large_expendable_memory(void)
 
     new_memory->next = pas_large_expendable_memory_head;
     pas_expendable_memory_construct(&new_memory->header, PAS_LARGE_EXPENDABLE_MEMORY_PAYLOAD_SIZE);
+    pas_expendable_memory_decommit_unallocated(&new_memory->header, pas_large_expendable_memory_payload(new_memory));
 
     pas_store_store_fence();
 
