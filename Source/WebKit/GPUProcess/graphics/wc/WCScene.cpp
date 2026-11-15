@@ -606,7 +606,8 @@ void WCScene::releaseVideoTexturesOfLayer(WebCore::PlatformLayerIdentifier layer
     });
 }
 
-// Repaints the scene as the last update left it, with a layer's new video frame, for present() to show.
+// Repaints the scene as the last update left it (with a layer's new video frame, or into resized buffers), for
+// present() to show.
 bool WCScene::repaintForVideo()
 {
     if (!m_lastUpdateWasOnScreen || !m_lastRootLayer)
@@ -645,8 +646,22 @@ void WCScene::present()
 #endif
     if (!m_context->makeContextCurrent())
         return;
+#if OS(WINDOWS)
+    auto sizeBefore = m_context->surfaceSize();
+#endif
     m_context->swapBuffers();
 #if OS(WINDOWS)
+    // ANGLE resizes the window's buffers to the window only after presenting, so the first frame after a resize
+    // went to buffers of the old size, and the window shows nothing (or that frame stretched) until the next present.
+    // A static page doesn't present again: its view stayed gray when shown again (the browser sizes a hidden view to
+    // 0x0) or after a resize (the find bar). Paint the scene again into the resized buffers and present it.
+    auto sizeAfter = m_context->surfaceSize();
+    if (sizeAfter != sizeBefore && !sizeAfter.isEmpty() && repaintForVideo()) {
+        m_needsPresent = false;
+        m_context->swapBuffers();
+        if (stats)
+            ++stats->resizePresents;
+    }
     if (stats)
         stats->reportIfDue(); // Video frames are shown without rendering updates, which report otherwise.
 #endif
