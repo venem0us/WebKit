@@ -138,6 +138,10 @@ void RenderingUpdateScheduler::windowScreenDidChange(PlatformDisplayID displayID
     DisplayRefreshMonitorManager::sharedManager().windowScreenDidChange(displayID, *this);
 }
 
+#if OS(WINDOWS)
+bool setDeliveringDisplayTick(bool); // DisplayRefreshMonitorWin.cpp
+#endif
+
 void RenderingUpdateScheduler::displayRefreshFired()
 {
     LOG_WITH_STREAM(EventLoop, stream << "RenderingUpdateScheduler for page " << m_page.ptr() << " displayRefreshFired()");
@@ -150,7 +154,16 @@ void RenderingUpdateScheduler::displayRefreshFired()
 #endif
 
     if (m_page->chrome().client().shouldTriggerRenderingUpdate(m_rescheduledRenderingUpdateCount)) {
+#if OS(WINDOWS)
+        // A paced update (the display clock or this scheduler's timer): the drawing area runs it right away, and
+        // waits for the next one for anything else. Not set for an invisible page's update, which
+        // scheduleRenderingUpdate() triggers synchronously from wherever it was requested (mid style update, say).
+        bool wasDelivering = setDeliveringDisplayTick(true);
         triggerRenderingUpdate();
+        setDeliveringDisplayTick(wasDelivering);
+#else
+        triggerRenderingUpdate();
+#endif
         m_rescheduledRenderingUpdateCount = 0;
     } else {
         scheduleRenderingUpdate();
