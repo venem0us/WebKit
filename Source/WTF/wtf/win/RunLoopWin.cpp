@@ -257,7 +257,10 @@ void RunLoop::TimerBase::timerFired()
         if (!m_isActive)
             return;
 
-        if (!m_isRepeating) {
+        if (m_runLoop->m_timers.contains(this)) {
+            // Restarted by another thread after FireTimerMessage took it off m_timersToFire: it fires now and
+            // stays scheduled as start() left it (see start()).
+        } else if (!m_isRepeating) {
             m_isActive = false;
             m_nextFireDate = MonotonicTime::infinity();
         } else {
@@ -289,8 +292,16 @@ void RunLoop::TimerBase::start(Seconds interval, bool repeat)
 {
     Locker locker { m_runLoop->m_loopLock };
     if (isActiveWithLock()) {
-        // Rescheduling timer that's already started
+        // Rescheduling timer that's already started. It may be due already: fireTimers() moved it to
+        // m_timersToFire (still active) and its FireTimerMessage is pending. Take it out of there too, or it
+        // would sit in both lists; once that fire ran (making it inactive with an infinite fire date) its entry
+        // would stay in m_timers for good, and fireTimers() stops at the first timer that isn't due, so every
+        // timer behind it would never fire again. That happens when another thread restarts a timer (a media
+        // player's sink thread scheduling a repaint, say) just as the run loop's thread fires it.
         m_runLoop->m_timers.removeFirstMatching([&] (TimerBase* t) -> bool {
+            return this == t;
+        });
+        m_runLoop->m_timersToFire.removeAllMatching([&] (TimerBase* t) -> bool {
             return this == t;
         });
     }
