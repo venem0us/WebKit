@@ -18277,8 +18277,19 @@ void WebPageProxy::didCommitCrossSiteLoadWithDataTransferFromPrevalentResource()
     send(Messages::WebPage::WasLoadedWithDataTransferFromPrevalentResource());
 }
 
+// Glass: the app's light/dark theme, set through WKPageSetUseDarkAppearanceForTesting. Windows' PageClientImpl has no
+// effective appearance (always light), so without this every new web process (a site in another process, a crash, a
+// sleeping tab woken) started light again. One value for the whole UI process: the theme is app-wide.
+static std::optional<bool>& glassDarkAppearance()
+{
+    static std::optional<bool> value;
+    return value;
+}
+
 bool WebPageProxy::useDarkAppearance() const
 {
+    if (auto dark = glassDarkAppearance())
+        return *dark;
     RefPtr pageClient = this->pageClient();
     return pageClient && pageClient->effectiveAppearanceIsDark();
 }
@@ -18301,6 +18312,7 @@ void WebPageProxy::setUseColorAppearance(bool useDarkAppearance, bool useElevate
 
 void WebPageProxy::setUseDarkAppearanceForTesting(bool useDarkAppearance)
 {
+    glassDarkAppearance() = useDarkAppearance;
     setUseColorAppearance(useDarkAppearance, useElevatedUserInterfaceLevel());
 }
 
