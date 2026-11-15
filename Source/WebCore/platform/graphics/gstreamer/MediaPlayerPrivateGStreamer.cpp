@@ -4629,6 +4629,21 @@ void MediaPlayerPrivateGStreamer::setCompositorFrameSink(RefPtr<MediaPlayerCompo
         if (RefPtr player = m_player.get())
             player->repaint();
     }
+    // A new sink is a new layer in the GPU process (the old one went with its textures, as when a page's layers are
+    // rebuilt on returning to a background tab): it shows nothing until a frame comes, which a paused video never sends.
+    // That left a paused YouTube video white on returning to its tab. Send it the current frame.
+    pushCurrentFrameToCompositor();
+}
+
+void MediaPlayerPrivateGStreamer::pushCurrentFrameToCompositor()
+{
+    GRefPtr<GstSample> current;
+    {
+        Locker sampleLocker { m_sampleMutex };
+        current = m_sample;
+    }
+    if (current)
+        m_framesGoToCompositor = pushFrameToCompositor(current.get());
 }
 
 // The few functions of GStreamer's Direct3D 11 library used for frames that stay on the GPU, loaded at run time
