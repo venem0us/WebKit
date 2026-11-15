@@ -629,7 +629,8 @@ ExceptionOr<void> SourceBuffer::appendBufferInternal(std::span<const uint8_t> da
     m_appendBufferPending = true;
     // 6. Asynchronously run the buffer append algorithm.
     MediaPromise::AutoRejectProducer producer(PlatformMediaError::BufferRemoved);
-    protect(scriptExecutionContext())->enqueueTaskWhenSettled(producer.promise(), TaskSource::MediaElement, [weakThis = WeakPtr { *this }, id = ++m_appendBufferOperationId](MediaPromise::Result&& result) {
+    Ref appendPromise = producer.promise();
+    auto complete = [weakThis = WeakPtr { *this }, id = ++m_appendBufferOperationId](MediaPromise::Result&& result) {
         RefPtr protectedThis = weakThis.get();
         if (!protectedThis)
             return;
@@ -638,10 +639,8 @@ ExceptionOr<void> SourceBuffer::appendBufferInternal(std::span<const uint8_t> da
             return;
 
         protectedThis->sourceBufferPrivateAppendComplete(WTF::move(result));
-    });
-
-    // 5. Return control to the caller and run the rest of the steps asynchronously.
-    m_client->ensureWeakOnDispatcher([producer = WTF::move(producer), weakThis = WeakPtr { *this }, id = m_appendBufferOperationId](SourceBuffer&) mutable {
+    };
+    auto run = [producer = WTF::move(producer), weakThis = WeakPtr { *this }, id = m_appendBufferOperationId]() mutable {
         RefPtr protectedThis = weakThis.get();
         if (!protectedThis)
             return;
@@ -649,6 +648,45 @@ ExceptionOr<void> SourceBuffer::appendBufferInternal(std::span<const uint8_t> da
         if (id != protectedThis->m_appendBufferOperationId || !protectedThis->m_pendingAppendData || protectedThis->m_pendingAppendData->isEmpty())
             return producer.resolve();
         protectedThis->m_private->append(protectedThis->m_pendingAppendData.releaseNonNull())->chainTo(WTF::move(producer));
+    };
+
+#if OS(WINDOWS)
+    // In a document, start the append and take its completion on the main run loop instead of as HTML event loop
+    // tasks. Neither needs to be a task: only the update and updateend events are (sourceBufferPrivateAppendComplete()
+    // queues them). While a page loads, each task waits behind the page's own (its parser, scripts and network
+    // callbacks), and an append made three such hops: Twitch's appends took 0.3-1 s as its player started, which
+    // stalled it into rebuilding its MediaSource. A document whose tasks are suspended still gets its completion
+    // as a task. Workers keep the generic path.
+    if (isMainThread() && is<Document>(scriptExecutionContext())) {
+        RunLoop::mainSingleton().dispatch([weakThis = WeakPtr { *this }, run = WTF::move(run)]() mutable {
+            RefPtr protectedThis = weakThis.get();
+            if (!protectedThis || protectedThis->isRemoved())
+                return; // Dropping run rejects the append (BufferRemoved), as the generic path's wrapper does.
+            run();
+        });
+        appendPromise->whenSettled(RunLoop::mainSingleton(), [weakThis = WeakPtr { *this }, complete = WTF::move(complete)](auto&& result) mutable {
+            RefPtr protectedThis = weakThis.get();
+            if (!protectedThis)
+                return;
+            MediaPromise::Result settled = result;
+            RefPtr context = protectedThis->scriptExecutionContext();
+            if (context && context->activeDOMObjectsAreSuspended()) {
+                ActiveDOMObject::queueTaskKeepingObjectAlive(*protectedThis, TaskSource::MediaElement, [complete = WTF::move(complete), settled = WTF::move(settled)](auto&) mutable {
+                    complete(WTF::move(settled));
+                });
+                return;
+            }
+            complete(WTF::move(settled));
+        });
+        return { };
+    }
+#endif
+
+    protect(scriptExecutionContext())->enqueueTaskWhenSettled(WTF::move(appendPromise), TaskSource::MediaElement, WTF::move(complete));
+
+    // 5. Return control to the caller and run the rest of the steps asynchronously.
+    m_client->ensureWeakOnDispatcher([run = WTF::move(run)](SourceBuffer&) mutable {
+        run();
     }, true);
 
     return { };
