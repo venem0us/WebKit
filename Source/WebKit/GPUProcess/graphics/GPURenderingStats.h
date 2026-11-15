@@ -110,6 +110,8 @@ public:
     Duration createBuffer;     // creating an image buffer (tiles, canvases, filter intermediates)
     std::atomic<uint64_t> receivedBytes { 0 };
     std::atomic<uint64_t> flushes { 0 };       // update fences (RemoteRenderingBackend::flush)
+    // Video frames left on the GPU (WCScene): textures opened, shown, skipped for a newer one, and what went wrong.
+    std::atomic<uint64_t> textureImports { 0 }, textureImportFailures { 0 }, texturesShown { 0 }, texturesSkipped { 0 }, texturesMissing { 0 }, textureAcquireTimeouts { 0 }, texturesNotShown { 0 }, texturesReleasedWithLayer { 0 };
 
     void noteLargeDraw(int sourceWidth, int sourceHeight, float sourceRectWidth, float sourceRectHeight, float destWidth, float destHeight, float ctmScale, bool accelerated, int quality, float clipWidth, float clipHeight)
     {
@@ -152,7 +154,7 @@ public:
             draw = m_lastDraw;
         }
         if (auto* file = openLog()) {
-            std::fprintf(file, "+%.1fs window=%.0fms fences=%llu receive n=%llu total=%.1fms avg=%.2f max=%.1fms bytes=%.1fMB drawLarge n=%llu total=%.1fms avg=%.2f max=%.1fms drawSmall n=%llu total=%.1fms max=%.1fms flushTile n=%llu total=%.1fms avg=%.2f max=%.1fms lastLarge src=%dx%d srcRect=%.0fx%.0f dest=%.0fx%.0f ctmScale=%.2f accelerated=%d quality=%d clip=%.0fx%.0f videoUpload n=%llu avg=%.2f max=%.1fms composite n=%llu avg=%.2f max=%.1fms paint n=%llu avg=%.2f max=%.1fms present n=%llu avg=%.2f max=%.1fms filter n=%llu total=%.1f max=%.1fms imageBuffer n=%llu total=%.1f max=%.1fms layer n=%llu total=%.1f max=%.1fms fill n=%llu total=%.1f max=%.1fms displayList n=%llu total=%.1f max=%.1fms createBuffer n=%llu total=%.1f max=%.1fms\n",
+            std::fprintf(file, "+%.1fs window=%.0fms fences=%llu receive n=%llu total=%.1fms avg=%.2f max=%.1fms bytes=%.1fMB drawLarge n=%llu total=%.1fms avg=%.2f max=%.1fms drawSmall n=%llu total=%.1fms max=%.1fms flushTile n=%llu total=%.1fms avg=%.2f max=%.1fms lastLarge src=%dx%d srcRect=%.0fx%.0f dest=%.0fx%.0f ctmScale=%.2f accelerated=%d quality=%d clip=%.0fx%.0f videoUpload n=%llu avg=%.2f max=%.1fms composite n=%llu avg=%.2f max=%.1fms paint n=%llu avg=%.2f max=%.1fms present n=%llu avg=%.2f max=%.1fms filter n=%llu total=%.1f max=%.1fms imageBuffer n=%llu total=%.1f max=%.1fms layer n=%llu total=%.1f max=%.1fms fill n=%llu total=%.1f max=%.1fms displayList n=%llu total=%.1f max=%.1fms createBuffer n=%llu total=%.1f max=%.1fms textures import=%llu importFail=%llu shown=%llu skipped=%llu missing=%llu acquireTimeout=%llu notShown=%llu releasedWithLayer=%llu\n",
                 (nowUs - m_createdUs) / 1000000.0, (nowUs - last) / 1000.0,
                 static_cast<unsigned long long>(flushes.exchange(0)),
                 static_cast<unsigned long long>(receives), receiveTotal, receiveAvg, receiveMax, receivedBytes.exchange(0) / 1048576.0,
@@ -164,7 +166,9 @@ public:
                 static_cast<unsigned long long>(paints), paintAvg, paintMax, static_cast<unsigned long long>(presents), presentAvg, presentMax,
                 static_cast<unsigned long long>(filters), filterTotal, filterMax, static_cast<unsigned long long>(imageBuffers), imageBufferTotal, imageBufferMax,
                 static_cast<unsigned long long>(layers), layerTotal, layerMax, static_cast<unsigned long long>(fills), fillTotal, fillMax,
-                static_cast<unsigned long long>(lists), listTotal, listMax, static_cast<unsigned long long>(creates), createTotal, createMax);
+                static_cast<unsigned long long>(lists), listTotal, listMax, static_cast<unsigned long long>(creates), createTotal, createMax,
+                static_cast<unsigned long long>(textureImports.exchange(0)), static_cast<unsigned long long>(textureImportFailures.exchange(0)), static_cast<unsigned long long>(texturesShown.exchange(0)), static_cast<unsigned long long>(texturesSkipped.exchange(0)),
+                static_cast<unsigned long long>(texturesMissing.exchange(0)), static_cast<unsigned long long>(textureAcquireTimeouts.exchange(0)), static_cast<unsigned long long>(texturesNotShown.exchange(0)), static_cast<unsigned long long>(texturesReleasedWithLayer.exchange(0)));
             std::fflush(file);
         }
     }

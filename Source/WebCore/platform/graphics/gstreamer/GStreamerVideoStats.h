@@ -67,6 +67,8 @@ struct Counters {
     std::atomic<uint64_t> repaintsFired { 0 };    // main-thread repaint() calls (after timer coalescing)
     std::atomic<uint64_t> paints { 0 };           // paint() calls that drew a frame
     std::atomic<uint64_t> newFramesPainted { 0 }; // ...of which showed a frame not painted before
+    std::atomic<uint64_t> gpuFramesSent { 0 };    // frames handed to the compositor as GPU textures (no copy to memory)
+    std::atomic<uint64_t> gpuFrameFallbacks { 0 }; // frames on the GPU that went over through memory instead
     std::atomic<uint64_t> lastArrivalUs { 0 };
     std::atomic<uint64_t> lastRepaintUs { 0 };
     Duration arrivalToRepaint;  // streaming thread -> main thread (timers, GLib pump)
@@ -243,12 +245,12 @@ inline void reportIfDue(GstElement* sink)
     auto* debugCategory = category();
     GST_CAT_INFO(debugCategory,
         "window=%.0fms arrived=%" G_GUINT64_FORMAT " sinkRendered=%" G_GUINT64_FORMAT " sinkDroppedLate=%" G_GUINT64_FORMAT
-        " repaints=%" G_GUINT64_FORMAT " paints=%" G_GUINT64_FORMAT " newFramesPainted=%" G_GUINT64_FORMAT
+        " repaints=%" G_GUINT64_FORMAT " paints=%" G_GUINT64_FORMAT " newFramesPainted=%" G_GUINT64_FORMAT " gpuFrames=%" G_GUINT64_FORMAT " gpuFallbacks=%" G_GUINT64_FORMAT
         " arrival->repaint avg=%.1f max=%.1fms repaint->paint avg=%.1f max=%.1fms"
         " paint avg=%.1f max=%.1fms image avg=%.1f max=%.1fms (n=%" G_GUINT64_FORMAT ") convert avg=%.1f max=%.1fms (n=%" G_GUINT64_FORMAT ")"
         " pacingError avg=%.1f max=%.1fms hitches=%" G_GUINT64_FORMAT " tick->paint avg=%.1f max=%.1fms %s mse pushed=%" G_GUINT64_FORMAT " starved=%" G_GUINT64_FORMAT " starveWait avg=%.1f max=%.1fms ahead avg=%.0f max=%.0fms aheadUnder50ms=%" G_GUINT64_FORMAT " buffered avg=%.0f max=%.0fms bufferedUnder250ms=%" G_GUINT64_FORMAT,
         (now - last) / 1000.0, c.samplesArrived.exchange(0), renderedDelta, droppedDelta,
-        c.repaintsFired.exchange(0), c.paints.exchange(0), c.newFramesPainted.exchange(0),
+        c.repaintsFired.exchange(0), c.paints.exchange(0), c.newFramesPainted.exchange(0), c.gpuFramesSent.exchange(0), c.gpuFrameFallbacks.exchange(0),
         arrivalAvg, arrivalMax, repaintAvg, repaintMax, paintAvg, paintMax, imageAvg, imageMax, n4, convertAvg, convertMax, n5,
         pacingAvg, pacingMax, c.hitches.exchange(0), tickToPaintAvg, tickToPaintMax, tickStats,
         c.msePushed.exchange(0), c.mseStarved.exchange(0), starveAvg, starveMax, aheadAvg, aheadMax, c.mseAheadUnder50ms.exchange(0), bufferedAvg, bufferedMax, c.mseBufferedUnder250ms.exchange(0));

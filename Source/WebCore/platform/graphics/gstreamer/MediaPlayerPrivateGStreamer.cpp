@@ -152,6 +152,20 @@ static const FloatSize s_holePunchDefaultFrameSize(1280, 720);
 
 bool isMediaDiskCacheDisabled();
 
+// The sink element itself: m_videoSink can be a bin around it (the Windows Direct3D 11 one). Owned by the bin.
+static GstElement* innermostVideoSink(GstElement* sink)
+{
+    while (GST_IS_BIN(sink)) {
+        GUniquePtr<GstIterator> iter(gst_bin_iterate_sinks(GST_BIN_CAST(sink)));
+        GValue value = G_VALUE_INIT;
+        if (gst_iterator_next(iter.get(), &value) != GST_ITERATOR_OK)
+            break;
+        sink = GST_ELEMENT_CAST(g_value_get_object(&value));
+        g_value_unset(&value);
+    }
+    return sink;
+}
+
 #ifndef GST_DISABLE_GST_DEBUG
 class MediaLogObserver : public WebCoreLogObserver {
 public:
@@ -249,7 +263,7 @@ void MediaPlayerPrivateGStreamer::tearDown(bool clearMediaPlayer)
         m_eosTimerHandler.stop();
 
     if (m_videoSink) {
-        GRefPtr<GstPad> videoSinkPad = adoptGRef(gst_element_get_static_pad(m_videoSink.get(), "sink"));
+        GRefPtr<GstPad> videoSinkPad = adoptGRef(gst_element_get_static_pad(innermostVideoSink(m_videoSink.get()), "sink"));
         g_signal_handlers_disconnect_matched(videoSinkPad.get(), G_SIGNAL_MATCH_DATA, 0, 0, nullptr, nullptr, this);
     }
 
@@ -259,7 +273,7 @@ void MediaPlayerPrivateGStreamer::tearDown(bool clearMediaPlayer)
 #endif
 
     if (m_videoSink)
-        g_signal_handlers_disconnect_matched(m_videoSink.get(), G_SIGNAL_MATCH_DATA, 0, 0, nullptr, nullptr, this);
+        g_signal_handlers_disconnect_matched(innermostVideoSink(m_videoSink.get()), G_SIGNAL_MATCH_DATA, 0, 0, nullptr, nullptr, this);
 
     // This will release the GStreamer thread from m_drawCondition in non AC mode in case there's an ongoing triggerRepaint call
     // waiting there, and ensure that any triggerRepaint call reaching the lock won't wait on m_drawCondition.
@@ -3643,7 +3657,18 @@ void MediaPlayerPrivateGStreamer::setPlaybackFlags(bool isMediaStream)
     unsigned additionalFlags = GStreamerQuirksManager::singleton().getAdditionalPlaybinFlags();
     hasText &= additionalFlags;
     hasSoftwareColorBalance &= additionalFlags;
+#if OS(WINDOWS)
+    // The Direct3D 11 sink bin does its own conversion, on the GPU. playbin's software color balance and
+    // deinterlacing would put CPU elements (and a converter) back in front of it, so they're off with it.
+    if (!m_usesD3D11VideoSink)
+        hasNativeVideo &= additionalFlags;
+    else {
+        hasSoftwareColorBalance = 0;
+        flags = flags & ~getGstPlayFlag("deinterlace");
+    }
+#else
     hasNativeVideo &= additionalFlags;
+#endif
     hasNativeAudio &= additionalFlags;
 
     if (!m_isUsingFallbackVideoSink) {
@@ -4326,7 +4351,7 @@ void MediaPlayerPrivateGStreamer::triggerRepaint(GRefPtr<GstSample>&& sample)
                     ++stats.mseAheadUnder50ms;
             }
         }
-        GStreamerVideoStats::reportIfDue(m_videoSink.get());
+        GStreamerVideoStats::reportIfDue(innermostVideoSink(m_videoSink.get()));
     }
 #endif
 
@@ -4599,6 +4624,42 @@ void MediaPlayerPrivateGStreamer::setCompositorFrameSink(RefPtr<MediaPlayerCompo
     }
 }
 
+// The few functions of GStreamer's Direct3D 11 library used for frames that stay on the GPU, loaded at run time
+// (WebCore doesn't link the library; the d3d11 plugin, which does, loads it): whether a memory is a D3D11 texture,
+// the texture and its subresource, and the lock of the device that owns it.
+struct GstD3D11MemoryLayout {
+    GstMemory mem;
+    GstObject* device; // GstD3D11Device (the public part of GstD3D11Memory)
+};
+struct GstD3D11Functions {
+    gboolean (*isD3D11Memory)(GstMemory*);
+    void* (*resourceHandle)(GstMemory*);
+    guint (*subresourceIndex)(GstMemory*);
+    void (*deviceLock)(GstObject*);
+    void (*deviceUnlock)(GstObject*);
+};
+static const GstD3D11Functions* gstD3D11Functions()
+{
+    static const std::optional<GstD3D11Functions> functions = []() -> std::optional<GstD3D11Functions> {
+        HMODULE module = GetModuleHandleW(L"gstd3d11-1.0-0.dll");
+        if (!module)
+            module = LoadLibraryW(L"gstd3d11-1.0-0.dll");
+        if (!module)
+            return std::nullopt;
+        GstD3D11Functions functions {
+            reinterpret_cast<gboolean (*)(GstMemory*)>(GetProcAddress(module, "gst_is_d3d11_memory")),
+            reinterpret_cast<void* (*)(GstMemory*)>(GetProcAddress(module, "gst_d3d11_memory_get_resource_handle")),
+            reinterpret_cast<guint (*)(GstMemory*)>(GetProcAddress(module, "gst_d3d11_memory_get_subresource_index")),
+            reinterpret_cast<void (*)(GstObject*)>(GetProcAddress(module, "gst_d3d11_device_lock")),
+            reinterpret_cast<void (*)(GstObject*)>(GetProcAddress(module, "gst_d3d11_device_unlock")),
+        };
+        if (!functions.isD3D11Memory || !functions.resourceHandle || !functions.subresourceIndex || !functions.deviceLock || !functions.deviceUnlock)
+            return std::nullopt;
+        return functions;
+    }();
+    return functions ? &*functions : nullptr;
+}
+
 // Called on the sink thread with the newest sample. Sends the frame to the compositor and counts it as presented
 // (requestVideoFrameCallback and the stats), as presentedImage() does for a frame shown by a rendering update.
 bool MediaPlayerPrivateGStreamer::pushFrameToCompositor(GstSample* sample)
@@ -4618,19 +4679,31 @@ bool MediaPlayerPrivateGStreamer::pushFrameToCompositor(GstSample* sample)
     if (format != GST_VIDEO_FORMAT_BGRA && format != GST_VIDEO_FORMAT_BGRx)
         return false;
 
-    bool sent;
+    bool sent = false;
     {
         std::optional<GStreamerVideoStats::ScopedTimer> sendTimer;
         if (GStreamerVideoStats::enabled())
             sendTimer.emplace(GStreamerVideoStats::counters().paint);
-        GstVideoFrame frame;
-        if (!gst_video_frame_map(&frame, &info, buffer, GST_MAP_READ))
-            return false;
-        IntSize size(GST_VIDEO_FRAME_WIDTH(&frame), GST_VIDEO_FRAME_HEIGHT(&frame));
-        unsigned stride = GST_VIDEO_FRAME_PLANE_STRIDE(&frame, 0);
-        auto* data = static_cast<const uint8_t*>(GST_VIDEO_FRAME_PLANE_DATA(&frame, 0));
-        sent = sink->pushFrame(unsafeMakeSpan(data, static_cast<size_t>(stride) * size.height()), size, stride, format == GST_VIDEO_FORMAT_BGRx);
-        gst_video_frame_unmap(&frame);
+        // A frame on the GPU (from the d3d11convert sink bin) goes over as a texture, without a copy to memory.
+        GstMemory* memory = gst_buffer_n_memory(buffer) == 1 ? gst_buffer_peek_memory(buffer, 0) : nullptr;
+        if (auto* d3d11 = gstD3D11Functions(); d3d11 && memory && d3d11->isD3D11Memory(memory)) {
+            auto* device = reinterpret_cast<GstD3D11MemoryLayout*>(memory)->device;
+            d3d11->deviceLock(device);
+            sent = sink->pushD3D11Frame(d3d11->resourceHandle(memory), d3d11->subresourceIndex(memory), IntSize(GST_VIDEO_INFO_WIDTH(&info), GST_VIDEO_INFO_HEIGHT(&info)));
+            d3d11->deviceUnlock(device);
+            if (GStreamerVideoStats::enabled())
+                ++(sent ? GStreamerVideoStats::counters().gpuFramesSent : GStreamerVideoStats::counters().gpuFrameFallbacks);
+        }
+        if (!sent) {
+            GstVideoFrame frame;
+            if (!gst_video_frame_map(&frame, &info, buffer, GST_MAP_READ))
+                return false;
+            IntSize size(GST_VIDEO_FRAME_WIDTH(&frame), GST_VIDEO_FRAME_HEIGHT(&frame));
+            unsigned stride = GST_VIDEO_FRAME_PLANE_STRIDE(&frame, 0);
+            auto* data = static_cast<const uint8_t*>(GST_VIDEO_FRAME_PLANE_DATA(&frame, 0));
+            sent = sink->pushFrame(unsafeMakeSpan(data, static_cast<size_t>(stride) * size.height()), size, stride, format == GST_VIDEO_FORMAT_BGRx);
+            gst_video_frame_unmap(&frame);
+        }
     }
     if (!sent)
         return false;
@@ -4714,7 +4787,7 @@ RefPtr<NativeImage> MediaPlayerPrivateGStreamer::presentedImage(bool isPainting)
             stats.repaintToPaint.add(GStreamerVideoStats::nowMicroseconds() - repaint);
         if (isPainting)
             paintTimer.emplace(stats.paint);
-        GStreamerVideoStats::reportIfDue(m_videoSink.get());
+        GStreamerVideoStats::reportIfDue(innermostVideoSink(m_videoSink.get()));
     }
 
     RefPtr image = isNewFrame ? nullptr : m_lastPaintedImage;
@@ -4922,6 +4995,52 @@ bool MediaPlayerPrivateGStreamer::shouldIgnoreIntrinsicSize()
     return isHolePunchRenderingEnabled();
 }
 
+#if OS(WINDOWS)
+// With accelerated compositing, frames go to the compositor as Direct3D 11 textures: d3d11upload ! d3d11convert take
+// the decoder's output as it is (already on the GPU from the D3D11 decoders, or uploaded from software decoders) and
+// convert it to BGRA there, so frames are neither converted nor copied on the CPU (playbin's own converter is skipped
+// with the native-video flag). Null without d3d11convert or a D3D11 device, or with WEBKIT_GST_D3D11_VIDEO_SINK=0: frames then
+// stay in memory as before.
+static GRefPtr<GstElement> createD3D11VideoSinkBin(GstElement* videoSink)
+{
+    static const bool disabled = [] {
+        auto* value = std::getenv("WEBKIT_GST_D3D11_VIDEO_SINK");
+        return value && *value == '0';
+    }();
+    if (disabled)
+        return nullptr;
+    GRefPtr<GstElement> convert = makeGStreamerElement("d3d11convert"_s);
+    if (!convert)
+        return nullptr;
+    // d3d11convert opens its Direct3D 11 device when it goes to READY: without one (no GPU, say) this sink would fail.
+    static const bool hasDevice = [&convert] {
+        bool ready = gst_element_set_state(convert.get(), GST_STATE_READY) != GST_STATE_CHANGE_FAILURE;
+        gst_element_set_state(convert.get(), GST_STATE_NULL);
+        return ready;
+    }();
+    if (!hasDevice)
+        return nullptr;
+    // d3d11convert only takes frames already on the GPU: d3d11upload brings software decoders' frames there (and lets
+    // the D3D11 decoders' through as they are).
+    GRefPtr<GstElement> upload = makeGStreamerElement("d3d11upload"_s);
+    if (!upload)
+        return nullptr;
+    GRefPtr<GstElement> bin = gst_bin_new("webkit-d3d11-video-sink");
+    GstElement* capsFilter = gst_element_factory_make("capsfilter", nullptr);
+    GRefPtr<GstCaps> caps = adoptGRef(gst_caps_from_string("video/x-raw(memory:D3D11Memory), format=BGRA"));
+    g_object_set(capsFilter, "caps", caps.get(), nullptr);
+    gst_bin_add_many(GST_BIN_CAST(bin.get()), upload.get(), convert.get(), capsFilter, videoSink, nullptr);
+    if (!gst_element_link_many(upload.get(), convert.get(), capsFilter, videoSink, nullptr)) {
+        // Hand the sink back as it was (the caller still holds its own reference).
+        gst_bin_remove(GST_BIN_CAST(bin.get()), videoSink);
+        return nullptr;
+    }
+    GRefPtr pad = adoptGRef(gst_element_get_static_pad(upload.get(), "sink"));
+    gst_element_add_pad(bin.get(), gst_ghost_pad_new("sink", pad.get()));
+    return bin;
+}
+#endif
+
 GstElement* MediaPlayerPrivateGStreamer::createVideoSink()
 {
     acceleratedRenderingStateChanged();
@@ -4976,12 +5095,22 @@ GstElement* MediaPlayerPrivateGStreamer::createVideoSink()
     if (!m_videoSink) {
         m_isUsingFallbackVideoSink = true;
         m_videoSink = webkitVideoSinkNew();
-        g_signal_connect_swapped(m_videoSink.get(), "repaint-requested", G_CALLBACK(+[](MediaPlayerPrivateGStreamer* player, GstSample* sample) {
+        GstElement* videoSink = m_videoSink.get();
+#if OS(WINDOWS)
+        if (RefPtr player = m_player.get(); player && player->acceleratedCompositingEnabled()) {
+            if (GRefPtr bin = createD3D11VideoSinkBin(videoSink)) {
+                m_videoSink = WTF::move(bin);
+                m_usesD3D11VideoSink = true;
+                setPlaybackFlags(isMediaStreamPlayer());
+            }
+        }
+#endif
+        g_signal_connect_swapped(videoSink, "repaint-requested", G_CALLBACK(+[](MediaPlayerPrivateGStreamer* player, GstSample* sample) {
             player->triggerRepaint(GRefPtr<GstSample>(sample));
         }), this);
-        g_signal_connect_swapped(m_videoSink.get(), "repaint-cancelled", G_CALLBACK(repaintCancelledCallback), this);
+        g_signal_connect_swapped(videoSink, "repaint-cancelled", G_CALLBACK(repaintCancelledCallback), this);
 
-        GRefPtr pad = adoptGRef(gst_element_get_static_pad(m_videoSink.get(), "sink"));
+        GRefPtr pad = adoptGRef(gst_element_get_static_pad(videoSink, "sink"));
         g_signal_connect(pad.get(), "notify::caps", G_CALLBACK(+[](GstPad* videoSinkPad, GParamSpec*, MediaPlayerPrivateGStreamer* player) {
             player->videoSinkCapsChanged(videoSinkPad);
         }), this);
@@ -5044,7 +5173,7 @@ bool MediaPlayerPrivateGStreamer::updateVideoSinkStatistics()
         return false;
 
     GUniqueOutPtr<GstStructure> stats;
-    g_object_get(m_videoSink.get(), "stats", &stats.outPtr(), nullptr);
+    g_object_get(innermostVideoSink(m_videoSink.get()), "stats", &stats.outPtr(), nullptr);
     if (!stats)
         return false;
 

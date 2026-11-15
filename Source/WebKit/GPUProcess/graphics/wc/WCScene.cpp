@@ -44,10 +44,79 @@
 #include <WebCore/TextureMapperPlatformLayer.h>
 #include <WebCore/TextureMapperSparseBackingStore.h>
 #include <wtf/TZoneMallocInlines.h>
+#if OS(WINDOWS)
+#include <EGL/egl.h>
+#include <EGL/eglext.h>
+#include <EGL/eglext_angle.h>
+#include <d3d11_1.h>
+#include <wrl/client.h>
+#endif
 
 namespace WebKit {
 
 WTF_MAKE_TZONE_ALLOCATED_IMPL(WCScene);
+
+#if OS(WINDOWS)
+// A layer's contents drawn from a GL texture: a video frame the web process left on the GPU (see importVideoTexture).
+class WCVideoTextureLayer final : public WebCore::TextureMapperPlatformLayer {
+    WTF_MAKE_TZONE_ALLOCATED_INLINE(WCVideoTextureLayer);
+public:
+    void setTexture(GLuint texture) { m_texture = texture; }
+    void paintToTextureMapper(WebCore::TextureMapper& textureMapper, const WebCore::FloatRect& targetRect, const WebCore::TransformationMatrix& modelViewMatrix, float opacity) final
+    {
+        if (m_texture)
+            textureMapper.drawTexture(m_texture, { }, targetRect, modelViewMatrix, opacity);
+    }
+
+private:
+    GLuint m_texture { 0 };
+};
+
+// One of the web process's shared textures, opened on ANGLE's Direct3D 11 device and bound to a GL texture.
+struct WCScene::VideoTexture {
+    WTF_MAKE_TZONE_ALLOCATED_INLINE(WCScene::VideoTexture);
+public:
+    explicit VideoTexture(WebCore::PlatformLayerIdentifier layer)
+        : layer(layer)
+    {
+    }
+
+    ~VideoTexture()
+    {
+        if (held)
+            mutex->ReleaseSync(0);
+        if (glTexture)
+            glDeleteTextures(1, &glTexture);
+        if (image != EGL_NO_IMAGE_KHR) {
+            static auto destroyImage = reinterpret_cast<PFNEGLDESTROYIMAGEKHRPROC>(eglGetProcAddress("eglDestroyImageKHR"));
+            if (destroyImage)
+                destroyImage(display, image);
+        }
+    }
+
+    WebCore::PlatformLayerIdentifier layer;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> texture;
+    Microsoft::WRL::ComPtr<IDXGIKeyedMutex> mutex;
+    EGLDisplay display { EGL_NO_DISPLAY };
+    EGLImageKHR image { EGL_NO_IMAGE_KHR };
+    GLuint glTexture { 0 };
+    bool held { false }; // acquired with key 1: shown by its layer
+};
+
+// ANGLE's Direct3D 11 device for the current EGL display.
+static ID3D11Device* angleD3D11Device()
+{
+    static auto queryDisplay = reinterpret_cast<PFNEGLQUERYDISPLAYATTRIBEXTPROC>(eglGetProcAddress("eglQueryDisplayAttribEXT"));
+    static auto queryDevice = reinterpret_cast<PFNEGLQUERYDEVICEATTRIBEXTPROC>(eglGetProcAddress("eglQueryDeviceAttribEXT"));
+    if (!queryDisplay || !queryDevice)
+        return nullptr;
+    EGLAttrib device = 0;
+    EGLAttrib d3dDevice = 0;
+    if (!queryDisplay(eglGetCurrentDisplay(), EGL_DEVICE_EXT, &device) || !queryDevice(reinterpret_cast<EGLDeviceEXT>(device), EGL_D3D11_DEVICE_ANGLE, &d3dDevice))
+        return nullptr;
+    return reinterpret_cast<ID3D11Device*>(d3dDevice);
+}
+#endif
 
 struct WCScene::Layer final : public WCContentBuffer::Client {
     WTF_MAKE_TZONE_ALLOCATED_INLINE(WCScene::Layer);
@@ -73,6 +142,11 @@ public:
     std::unique_ptr<WebCore::TextureMapperLayer> backdropLayer;
     // The current frame of a video the web process hands over frame by frame, drawn into the contents rect.
     std::unique_ptr<WebCore::TextureMapperSparseBackingStore> videoFrame;
+#if OS(WINDOWS)
+    // ...or, for frames left on the GPU, the shared texture it shows (an id in m_videoTextures) and the layer drawing it.
+    std::unique_ptr<WCVideoTextureLayer> videoTextureLayer;
+    uint64_t shownTexture { 0 };
+#endif
     WCContentBuffer* contentBuffer { nullptr };
     Markable<WebCore::LayerHostingContextIdentifier> hostIdentifier;
 };
@@ -231,6 +305,11 @@ std::optional<UpdateInfo> WCScene::update(WCUpdateInfo&& update)
                 }
                 layer->texmapLayer.setContentsLayer(nullptr);
                 layer->videoFrame = nullptr;
+#if OS(WINDOWS)
+                layer->videoTextureLayer = nullptr;
+                layer->shownTexture = 0;
+                releaseVideoTexturesOfLayer(layerUpdate.id);
+#endif
             } else if (layerUpdate.platformLayer.videoFrame) {
                 if (RefPtr bitmap = layerUpdate.platformLayer.videoFrame->bitmap())
                     uploadVideoFrame(*layer, *bitmap);
@@ -263,6 +342,7 @@ std::optional<UpdateInfo> WCScene::update(WCUpdateInfo&& update)
         m_layers.remove(id);
 #if OS(WINDOWS)
         m_pendingVideoFrames.remove(id);
+        releaseVideoTexturesOfLayer(id);
 #endif
     }
 #if OS(WINDOWS)
@@ -356,6 +436,16 @@ void WCScene::uploadVideoFrame(Layer& layer, const WebCore::ShareableBitmap& bit
     layer.videoFrame->setSize(size);
     layer.videoFrame->updateContents({ }, *image, { { }, size });
     layer.texmapLayer.setContentsLayer(layer.videoFrame.get());
+#if OS(WINDOWS)
+    // Back from GPU textures to frames in memory: give the texture shown until now back to the web process.
+    if (layer.shownTexture) {
+        if (auto* texture = m_videoTextures.get(layer.shownTexture); texture && texture->held) {
+            texture->mutex->ReleaseSync(0);
+            texture->held = false;
+        }
+        layer.shownTexture = 0;
+    }
+#endif
 }
 
 #if OS(WINDOWS)
@@ -368,6 +458,123 @@ bool WCScene::updateVideoFrame(WebCore::PlatformLayerIdentifier identifier, cons
         m_pendingVideoFrames.set(identifier, RefPtr { const_cast<WebCore::ShareableBitmap*>(&bitmap) });
         return false;
     }
+    if (!m_lastUpdateWasOnScreen || !m_lastRootLayer || !m_context->makeContextCurrent())
+        return false;
+    {
+        auto* stats = GPURenderingStats::singletonIfEnabled();
+        GPURenderingStats::ScopedTimer compositeTimer(stats ? &stats->composite : nullptr);
+        m_textureMapper->releaseUnusedTexturesNow();
+        uploadVideoFrame(*layer, bitmap);
+    }
+    return repaintForVideo();
+}
+
+bool WCScene::importVideoTexture(WebCore::PlatformLayerIdentifier layerIdentifier, uint64_t textureIdentifier, const WebCore::IntSize&, WTF::Win32Handle&& handle)
+{
+    if (!m_context->makeContextCurrent())
+        return false;
+    auto* device = angleD3D11Device();
+    Microsoft::WRL::ComPtr<ID3D11Device1> device1;
+    if (!device || FAILED(device->QueryInterface(IID_PPV_ARGS(&device1))))
+        return false;
+    auto videoTexture = makeUnique<VideoTexture>(layerIdentifier);
+    if (FAILED(device1->OpenSharedResource1(handle.get(), IID_PPV_ARGS(&videoTexture->texture))) || FAILED(videoTexture->texture.As(&videoTexture->mutex)))
+        return false;
+
+    static auto createImage = reinterpret_cast<PFNEGLCREATEIMAGEKHRPROC>(eglGetProcAddress("eglCreateImageKHR"));
+    static auto imageTargetTexture = reinterpret_cast<void (*)(GLenum, void*)>(eglGetProcAddress("glEGLImageTargetTexture2DOES"));
+    if (!createImage || !imageTargetTexture)
+        return false;
+    videoTexture->display = eglGetCurrentDisplay();
+    const EGLint attributes[] = { EGL_NONE };
+    videoTexture->image = createImage(videoTexture->display, EGL_NO_CONTEXT, EGL_D3D11_TEXTURE_ANGLE, static_cast<EGLClientBuffer>(videoTexture->texture.Get()), attributes);
+    if (videoTexture->image == EGL_NO_IMAGE_KHR)
+        return false;
+    glGenTextures(1, &videoTexture->glTexture);
+    glBindTexture(GL_TEXTURE_2D, videoTexture->glTexture);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    imageTargetTexture(GL_TEXTURE_2D, videoTexture->image);
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    // A new set (a new size, say) replaces this layer's older ones, except the one it still shows.
+    uint64_t generation = textureIdentifier >> 2;
+    m_videoTextures.removeIf([&](auto& entry) {
+        return entry.value->layer == layerIdentifier && (entry.key >> 2) < generation && !entry.value->held;
+    });
+    m_videoTextures.set(textureIdentifier, WTF::move(videoTexture));
+    return true;
+}
+
+bool WCScene::updateVideoTexture(WebCore::PlatformLayerIdentifier layerIdentifier, uint64_t textureIdentifier)
+{
+    auto* stats = GPURenderingStats::singletonIfEnabled();
+    auto* texture = m_videoTextures.get(textureIdentifier);
+    if (!texture) {
+        if (stats)
+            ++stats->texturesMissing;
+        return false;
+    }
+    auto* layer = m_layers.get(layerIdentifier);
+    if (!layer || !m_lastUpdateWasOnScreen || !m_lastRootLayer || !m_context->makeContextCurrent()) {
+        if (stats)
+            ++stats->texturesNotShown;
+        skipVideoTexture(textureIdentifier);
+        return false;
+    }
+    if (texture->mutex->AcquireSync(1, 50) != S_OK) {
+        if (stats)
+            ++stats->textureAcquireTimeouts;
+        return false;
+    }
+    if (stats)
+        ++stats->texturesShown;
+    texture->held = true;
+    // Give back the texture shown until now: the web process can write into it again.
+    if (layer->shownTexture && layer->shownTexture != textureIdentifier) {
+        if (auto* previous = m_videoTextures.get(layer->shownTexture); previous && previous->held) {
+            previous->mutex->ReleaseSync(0);
+            previous->held = false;
+        }
+    }
+    layer->shownTexture = textureIdentifier;
+    layer->videoFrame = nullptr;
+    if (!layer->videoTextureLayer)
+        layer->videoTextureLayer = makeUnique<WCVideoTextureLayer>();
+    layer->videoTextureLayer->setTexture(texture->glTexture);
+    layer->texmapLayer.setContentsLayer(layer->videoTextureLayer.get());
+    return repaintForVideo();
+}
+
+void WCScene::skipVideoTexture(uint64_t textureIdentifier)
+{
+    auto* texture = m_videoTextures.get(textureIdentifier);
+    if (!texture || texture->held)
+        return;
+    if (auto* stats = GPURenderingStats::singletonIfEnabled())
+        ++stats->texturesSkipped;
+    if (texture->mutex->AcquireSync(1, 0) == S_OK)
+        texture->mutex->ReleaseSync(0);
+}
+
+void WCScene::releaseVideoTexturesOfLayer(WebCore::PlatformLayerIdentifier layerIdentifier)
+{
+    if (m_videoTextures.isEmpty() || !m_context->makeContextCurrent())
+        return;
+    m_videoTextures.removeIf([&](auto& entry) {
+        if (entry.value->layer != layerIdentifier)
+            return false;
+        if (auto* stats = GPURenderingStats::singletonIfEnabled())
+            ++stats->texturesReleasedWithLayer;
+        return true;
+    });
+}
+
+// Repaints the scene as the last update left it, with a layer's new video frame, for present() to show.
+bool WCScene::repaintForVideo()
+{
     if (!m_lastUpdateWasOnScreen || !m_lastRootLayer)
         return false;
     auto* root = m_layers.get(*m_lastRootLayer);
@@ -375,8 +582,6 @@ bool WCScene::updateVideoFrame(WebCore::PlatformLayerIdentifier identifier, cons
         return false;
     auto* stats = GPURenderingStats::singletonIfEnabled();
     GPURenderingStats::ScopedTimer compositeTimer(stats ? &stats->composite : nullptr);
-    m_textureMapper->releaseUnusedTexturesNow();
-    uploadVideoFrame(*layer, bitmap);
 
     auto& rootLayer = root->texmapLayer;
     rootLayer.applyAnimationsRecursively(MonotonicTime::now());
@@ -407,6 +612,10 @@ void WCScene::present()
     if (!m_context->makeContextCurrent())
         return;
     m_context->swapBuffers();
+#if OS(WINDOWS)
+    if (stats)
+        stats->reportIfDue(); // Video frames are shown without rendering updates, which report otherwise.
+#endif
 }
 
 } // namespace WebKit

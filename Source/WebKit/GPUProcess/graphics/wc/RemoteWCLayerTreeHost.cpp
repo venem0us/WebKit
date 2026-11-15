@@ -30,6 +30,7 @@
 
 #include "GPUConnectionToWebProcess.h"
 #include "GPUProcess.h"
+#include "GPURenderingStats.h"
 #include "RemoteGraphicsContextGL.h"
 #include "RemoteWCLayerTreeHostMessages.h"
 #include "StreamConnectionWorkQueue.h"
@@ -116,25 +117,60 @@ void RemoteWCLayerTreeHost::updateVideoFrame(WebCore::PlatformLayerIdentifier la
     RefPtr bitmap = frame.bitmap();
     if (!bitmap)
         return;
-    {
-        Locker locker { m_videoFrames->lock };
-        m_videoFrames->frames.set(layer, WTF::move(bitmap));
-        if (m_videoFrames->drainScheduled)
-            return;
-        m_videoFrames->drainScheduled = true;
-    }
+    Locker locker { m_videoFrames->lock };
+    m_videoFrames->frames.set(layer, WTF::move(bitmap));
+    scheduleVideoFrameDrain();
+}
+
+void RemoteWCLayerTreeHost::importVideoTexture(WebCore::PlatformLayerIdentifier layer, uint64_t texture, WebCore::IntSize size, WTF::Win32Handle&& handle, CompletionHandler<void(bool)>&& completionHandler)
+{
+    Locker locker { m_videoFrames->lock };
+    m_videoFrames->textureImports.append({ layer, texture, size, WTF::move(handle), WTF::move(completionHandler) });
+    scheduleVideoFrameDrain();
+}
+
+void RemoteWCLayerTreeHost::updateVideoTexture(WebCore::PlatformLayerIdentifier layer, uint64_t texture)
+{
+    Locker locker { m_videoFrames->lock };
+    m_videoFrames->textureFrames.ensure(layer, [] { return Vector<uint64_t> { }; }).iterator->value.append(texture);
+    scheduleVideoFrameDrain();
+}
+
+void RemoteWCLayerTreeHost::scheduleVideoFrameDrain()
+{
+    if (m_videoFrames->drainScheduled)
+        return;
+    m_videoFrames->drainScheduled = true;
     // Queued behind any layer tree update already on the work queue, so a frame never lands on a layer the scene
     // doesn't have yet. The scene outlives this task: it's destroyed by a task queued after it.
     remoteGraphicsStreamWorkQueue().dispatch([scene = m_scene.get(), mailbox = m_videoFrames] {
         HashMap<WebCore::PlatformLayerIdentifier, RefPtr<WebCore::ShareableBitmap>> frames;
+        Vector<TextureImport> imports;
+        HashMap<WebCore::PlatformLayerIdentifier, Vector<uint64_t>> textureFrames;
         {
             Locker locker { mailbox->lock };
             frames = std::exchange(mailbox->frames, { });
+            imports = std::exchange(mailbox->textureImports, { });
+            textureFrames = std::exchange(mailbox->textureFrames, { });
             mailbox->drainScheduled = false;
+        }
+        for (auto& import : imports) {
+            bool imported = scene->importVideoTexture(import.layer, import.texture, import.size, WTF::move(import.handle));
+            if (auto* stats = GPURenderingStats::singletonIfEnabled())
+                ++(imported ? stats->textureImports : stats->textureImportFailures);
+            RunLoop::mainSingleton().dispatch([completionHandler = WTF::move(import.completionHandler), imported]() mutable {
+                completionHandler(imported);
+            });
         }
         bool painted = false;
         for (auto& [layer, bitmap] : frames)
             painted |= scene->updateVideoFrame(layer, *bitmap);
+        for (auto& [layer, textures] : textureFrames) {
+            // Only the newest is shown; the others go straight back to the web process.
+            for (size_t i = 0; i + 1 < textures.size(); ++i)
+                scene->skipVideoTexture(textures[i]);
+            painted |= scene->updateVideoTexture(layer, textures.last());
+        }
         if (painted)
             scene->present();
     });

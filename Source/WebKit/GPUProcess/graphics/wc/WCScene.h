@@ -34,6 +34,9 @@
 #include <wtf/Forward.h>
 #include <wtf/HashMap.h>
 #include <wtf/TZoneMalloc.h>
+#if OS(WINDOWS)
+#include <wtf/win/Win32Handle.h>
+#endif
 
 namespace WebCore {
 class ShareableBitmap;
@@ -63,6 +66,13 @@ public:
     // into the layer's video contents and repaints the scene as the last update left it, for present() to show.
     // Only for scenes painted to the window; returns false (the frame is dropped) otherwise.
     bool updateVideoFrame(WebCore::PlatformLayerIdentifier, const WebCore::ShareableBitmap&);
+    // Video frames that stay on the GPU: the web process's shared Direct3D 11 textures, opened once each on ANGLE's
+    // device (importVideoTexture), then shown frame by frame (updateVideoTexture: the layer draws the texture, repainted
+    // like updateVideoFrame) or handed straight back unshown (skipVideoTexture). Each texture's keyed mutex passes it
+    // between the processes: the scene holds the texture a layer shows (key 1) and gives it back (key 0) for the next.
+    bool importVideoTexture(WebCore::PlatformLayerIdentifier, uint64_t texture, const WebCore::IntSize&, WTF::Win32Handle&&);
+    bool updateVideoTexture(WebCore::PlatformLayerIdentifier, uint64_t texture);
+    void skipVideoTexture(uint64_t texture);
 #endif
 
 private:
@@ -76,6 +86,10 @@ private:
     // Frames for layers the scene doesn't have yet (a paused video's first frame can arrive before the rendering
     // update that adds its layer): applied when the layer arrives.
     HashMap<WebCore::PlatformLayerIdentifier, RefPtr<WebCore::ShareableBitmap>> m_pendingVideoFrames;
+    struct VideoTexture;
+    HashMap<uint64_t, std::unique_ptr<VideoTexture>> m_videoTextures;
+    bool repaintForVideo();
+    void releaseVideoTexturesOfLayer(WebCore::PlatformLayerIdentifier);
 #endif
 
     WebCore::ProcessIdentifier m_webProcessIdentifier;
