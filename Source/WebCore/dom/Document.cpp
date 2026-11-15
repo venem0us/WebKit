@@ -4681,7 +4681,13 @@ Seconds Document::domTimerAlignmentInterval(bool hasReachedMaxNestingLevel) cons
         return alignmentInterval;
 
     // Apply Document-level DOMTimer throttling only if timers have reached their maximum nesting level as the Page may still be visible.
+#if !OS(WINDOWS)
     alignmentInterval = std::max(alignmentInterval, DOMTimer::minimumAlignmentForMaximallyNestedTimers());
+#else
+    // Not on a visible page: the alignment rounds up to the next 4 ms boundary, so a 4 ms interval (the HTML clamp, which
+    // intervalClampedToMinimum() still applies) that lands on or just past one waited for the one after. setInterval(4)
+    // ran every 8 ms (125 a second, against Chrome's 250), setInterval(10) every 12 ms. Hidden pages still align (below).
+#endif
 
     if (m_isTimerThrottlingEnabled)
         alignmentInterval = std::max(alignmentInterval, DOMTimer::hiddenPageAlignmentInterval());
