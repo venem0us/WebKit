@@ -3863,6 +3863,17 @@ void MediaPlayerPrivateGStreamer::configureVideoDecoder(GstElement* decoder)
     else if (gstElementFactoryEquals(decoder, "qtic2vdec"_s) || startsWith(name.span(), "c2vdec"_s))
         m_videoDecoderPlatform = GstVideoDecoderPlatform::Qualcomm;
 
+#if OS(WINDOWS)
+    // Which decoder each video got, and whether it decodes on the graphics card (the Direct3D decoders' class says
+    // "Hardware"), so video statistics show what ran.
+    if (GStreamerVideoStats::enabled()) {
+        auto* factory = gst_element_get_factory(decoder);
+        const char* klass = factory ? gst_element_factory_get_metadata(factory, GST_ELEMENT_METADATA_KLASS) : nullptr;
+        GST_CAT_INFO(GStreamerVideoStats::category(), "decoder: %s (%s)", factory ? GST_OBJECT_NAME(factory) : "unknown",
+            klass && g_strrstr(klass, "Hardware") ? "hardware" : "software");
+    }
+#endif
+
     if (gstElementMatchesFactoryAndHasProperty(decoder, "avdec*"_s, "max-threads"_s)) {
 #if OS(WINDOWS)
         // The Windows port decodes in software only, so two threads can't keep up with 1080p60 and higher.
