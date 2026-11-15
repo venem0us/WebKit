@@ -1203,7 +1203,11 @@ static void preCommitStackMemory(void* stackLimit)
     if (committedEnd <= stackLimit)
         return;
 
-    for (volatile char* p = reinterpret_cast<char*>(&stackLimit); p > stackLimit; p -= pageSize) {
+    // Glass: from the lowest committed page down, not from here: the pages between were touched (and given back,
+    // below) by an earlier call, and touching them again puts them back in memory. The limit moves by a little
+    // with each entry, so that happened on most entries.
+    char* start = std::min(reinterpret_cast<char*>(&stackLimit), committedEnd - 1);
+    for (volatile char* p = start; p > stackLimit; p -= pageSize) {
         char ch = *p;
         *p = ch;
     }
@@ -1252,7 +1256,14 @@ void VM::updateStackLimits()
         // In contrast, we do not need to worry about VM::m_stackLimit because that limit is
         // used exclusively by C++ code, and the C++ compiler will automatically commit the
         // needed stack pages.
-        preCommitStackMemory(newSoftStackLimit);
+        //
+        // Glass: only while the VM is entered. With no entry point the limit is the end of the whole stack, and
+        // this ran every time the JS lock was released: it committed all 8 MB of every thread that had ever run
+        // JavaScript, although scripts get at most Options::maxPerThreadStackUsage() (5 MB) below their entry
+        // point, and LLInt and JIT code only run between an entry and its exit. Entering sets the limit again
+        // (JSLock::didAcquireLock), and that commits what the script may use.
+        if (m_stackPointerAtVMEntry)
+            preCommitStackMemory(newSoftStackLimit);
 #endif
     }
 }
