@@ -3093,8 +3093,12 @@ void MediaPlayerPrivateGStreamer::updateStates()
                 m_areVolumeAndMuteInitialized = true;
             }
 
+            // Also when this PAUSED is the end of a pause for buffering and buffering has finished meanwhile: the message that
+            // ended it can arrive before the state change completes (see the ASYNC case), and none follows once the download
+            // is complete, so waiting for a buffering -> not buffering change here left a looping video paused for good.
+            bool bufferingPauseIsOver = m_playbackRatePausedState == PlaybackRatePausedState::BufferingPaused && !m_isBuffering && !m_isPaused && m_playbackRate;
             if ((m_wasBuffering && !m_isBuffering && !m_isPaused && m_playbackRatePausedState != PlaybackRatePausedState::ManuallyPaused && m_playbackRate)
-                || m_playbackRatePausedState == PlaybackRatePausedState::ShouldMoveToPlaying) {
+                || bufferingPauseIsOver || m_playbackRatePausedState == PlaybackRatePausedState::ShouldMoveToPlaying) {
                 m_playbackRatePausedState = PlaybackRatePausedState::Playing;
                 GST_INFO_OBJECT(pipeline(), "[Buffering] Restarting playback (because of buffering or resuming from zero playback rate)");
                 changePipelineState(GST_STATE_PLAYING);
@@ -3151,7 +3155,9 @@ void MediaPlayerPrivateGStreamer::updateStates()
 
         // Delay the m_isBuffering change by returning it to its previous value. Without this, the false --> true change
         // would go unnoticed by the code that should trigger a pause.
-        if (m_wasBuffering != m_isBuffering && !m_isPaused && m_playbackRate) {
+        // Only the not buffering -> buffering change, as said: delaying the end of buffering too lost it when it arrived during the
+        // pause for buffering (a burst of 0%, 52%, 100% right after a seek), and the pipeline stayed PAUSED.
+        if (!m_wasBuffering && m_isBuffering && !m_isPaused && m_playbackRate) {
             GST_TRACE_OBJECT(pipeline(), "[Buffering] Delaying m_isBuffering %s --> %s to force the proper change from not buffering to buffering when the async state change completes.", boolForPrinting(m_wasBuffering), boolForPrinting(m_isBuffering));
             m_isBuffering = m_wasBuffering;
             m_bufferingPercentage = m_previousBufferingPercentage;
