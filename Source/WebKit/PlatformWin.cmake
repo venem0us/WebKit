@@ -50,6 +50,8 @@ list(APPEND WebKit_SOURCES
 
     UIProcess/WebsiteData/win/WebsiteDataStoreWin.cpp
 
+    UIProcess/WebAuthentication/win/WebAuthenticatorCoordinatorProxyWin.cpp
+
     UIProcess/win/AutomationClientWin.cpp
     UIProcess/win/AutomationSessionClientWin.cpp
     UIProcess/win/PageClientImpl.cpp
@@ -106,6 +108,17 @@ list(APPEND WebKit_PRIVATE_INCLUDE_DIRECTORIES
     "${WEBKIT_DIR}/WebProcess/WebPage/CoordinatedGraphics"
     "${WEBKIT_DIR}/WebProcess/WebPage/win"
     "${WEBKIT_DIR}/win"
+
+    # Glass: Web Authentication through webauthn.dll (glass-webauthn-windows.patch). The Virtual folder's headers
+    # compile to nothing on Windows but are still included by shared code.
+    "${WEBKIT_DIR}/UIProcess/WebAuthentication/Virtual"
+    "${WEBKIT_DIR}/UIProcess/WebAuthentication/fido"
+    "${WEBKIT_DIR}/WebProcess/DigitalCredentials"
+    "${WEBKIT_DIR}/WebProcess/WebAuthentication"
+)
+
+list(APPEND WebKit_MESSAGES_IN_FILES
+    UIProcess/WebAuthentication/WebAuthenticatorCoordinatorProxy
 )
 
 list(APPEND WebKit_PUBLIC_FRAMEWORK_HEADERS

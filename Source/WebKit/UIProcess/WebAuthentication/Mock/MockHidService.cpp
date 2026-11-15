@@ -26,7 +26,7 @@
 #include "config.h"
 #include "MockHidService.h"
 
-#if ENABLE(WEB_AUTHN)
+#if ENABLE(WEB_AUTHN) && !PLATFORM(WIN) // Glass: Windows uses webauthn.dll (win/WebAuthenticatorCoordinatorProxyWin.cpp)
 
 #include "Logging.h"
 #include "MockHidConnection.h"

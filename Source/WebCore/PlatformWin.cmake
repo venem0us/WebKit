@@ -34,6 +34,11 @@ list(APPEND WebCore_SOURCES
     accessibility/win/AccessibilityObjectWin.cpp
     accessibility/win/AccessibilityObjectWrapperWin.cpp
 
+    # Glass: Web Authentication extension data (plain C++, listed only for Cocoa upstream).
+    Modules/webauthn/AuthenticationExtensionsClientInputs.cpp
+    Modules/webauthn/AuthenticationExtensionsClientOutputs.cpp
+    crypto/cocoa/CommonCryptoDERUtilities.cpp
+
     editing/win/EditorWin.cpp
 
     html/HTMLSelectElementWin.cpp

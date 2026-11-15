@@ -28,9 +28,10 @@
 
 #if ENABLE(WEB_AUTHN)
 
-#import "WebFrameProxy.h"
-#import <WebCore/SecurityOriginData.h>
-#import <WebCore/UserVerificationRequirement.h>
+// Glass: #include, not #import (on Windows, #import means a type library).
+#include "WebFrameProxy.h"
+#include <WebCore/SecurityOriginData.h>
+#include <WebCore/UserVerificationRequirement.h>
 
 namespace WebKit {
 using namespace WebCore;
