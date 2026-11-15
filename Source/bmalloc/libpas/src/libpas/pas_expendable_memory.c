@@ -52,6 +52,7 @@ void pas_expendable_memory_construct(pas_expendable_memory* memory,
     memory->bump = 0;
     PAS_ASSERT((unsigned)size == size);
     memory->size = (unsigned)size;
+    memory->committed = (unsigned)size;
 
     PAS_ASSERT(pas_is_aligned(size, PAS_EXPENDABLE_MEMORY_PAGE_SIZE));
 
@@ -60,6 +61,45 @@ void pas_expendable_memory_construct(pas_expendable_memory* memory,
             pas_expendable_memory_state_create(PAS_EXPENDABLE_MEMORY_STATE_KIND_DECOMMITTED, 1);
     }
 }
+
+void pas_expendable_memory_decommit_unallocated(pas_expendable_memory* header, void* payload)
+{
+#if PAS_EXPENDABLE_MEMORY_COMMITS_LAZILY
+    pas_heap_lock_assert_held();
+
+    PAS_ASSERT(!header->bump);
+    PAS_ASSERT(header->committed == header->size);
+    PAS_ASSERT(pas_is_aligned((uintptr_t)payload, pas_page_malloc_alignment()));
+    PAS_ASSERT(pas_is_aligned(header->size, pas_page_malloc_alignment()));
+
+    pas_page_malloc_decommit_without_mprotect(payload, header->size, /* is_symmetric */ true, pas_page_flags_none);
+    header->committed = 0;
+#else
+    PAS_UNUSED_PARAM(header);
+    PAS_UNUSED_PARAM(payload);
+#endif
+}
+
+#if PAS_EXPENDABLE_MEMORY_COMMITS_LAZILY
+/* Makes sure the payload is committed up to new_bump. The scavenger only ever looks at pages below bump, so those
+   are always committed. */
+static void commit_up_to(pas_expendable_memory* header, void* payload, size_t new_bump)
+{
+    size_t target;
+
+    if (PAS_LIKELY(new_bump <= header->committed))
+        return;
+
+    target = pas_round_up_to_power_of_2(new_bump, PAS_EXPENDABLE_MEMORY_COMMIT_WINDOW);
+    target = PAS_MIN(target, (size_t)header->size);
+    PAS_ASSERT(target >= new_bump);
+
+    pas_page_malloc_commit_without_mprotect(
+        (char*)payload + header->committed, target - header->committed,
+        /* is_symmetric */ true, pas_page_flags_none);
+    header->committed = (unsigned)target;
+}
+#endif
 
 void* pas_expendable_memory_try_allocate(pas_expendable_memory* header,
                                          void* payload,
@@ -117,6 +157,10 @@ void* pas_expendable_memory_try_allocate(pas_expendable_memory* header,
     header->bump = (unsigned)new_aligned_bump;
 
     result = (char*)payload + aligned_bump;
+
+#if PAS_EXPENDABLE_MEMORY_COMMITS_LAZILY
+    commit_up_to(header, payload, new_aligned_bump);
+#endif
 
     ((pas_expendable_memory_state_version*)result)[-1] = version;
 

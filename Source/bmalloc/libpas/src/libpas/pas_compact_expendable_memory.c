@@ -57,6 +57,8 @@ void* pas_compact_expendable_memory_allocate(size_t size,
         pas_compact_expendable_memory_payload = (void*)new_memory_result.begin;
         pas_expendable_memory_construct(&pas_compact_expendable_memory_header.header,
                                         PAS_COMPACT_EXPENDABLE_MEMORY_PAYLOAD_SIZE);
+        pas_expendable_memory_decommit_unallocated(&pas_compact_expendable_memory_header.header,
+                                                   pas_compact_expendable_memory_payload);
     }
 
     PAS_ASSERT(pas_compact_expendable_memory_header.header.size);
