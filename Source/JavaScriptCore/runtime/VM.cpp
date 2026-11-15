@@ -1176,6 +1176,8 @@ size_t VM::updateSoftReservedZoneSize(size_t softReservedZoneSize)
 }
 
 #if OS(WINDOWS)
+#include <windows.h>
+
 // On Windows the reserved stack space consists of committed memory, a guard page, and uncommitted memory,
 // where the guard page is a barrier between committed and uncommitted memory.
 // When data from the guard page is read or written, the guard page is moved, and memory is committed.
@@ -1193,10 +1195,27 @@ size_t VM::updateSoftReservedZoneSize(size_t softReservedZoneSize)
 static void preCommitStackMemory(void* stackLimit)
 {
     const int pageSize = 4096;
+
+    // Glass: the thread's own record of how far down its stack is committed says whether there is anything to do.
+    // The limit moves with the depth at which the VM is entered, so this ran, and touched every page down to the
+    // limit, on most entries.
+    char* committedEnd = static_cast<char*>(reinterpret_cast<NT_TIB*>(NtCurrentTeb())->StackLimit);
+    if (committedEnd <= stackLimit)
+        return;
+
     for (volatile char* p = reinterpret_cast<char*>(&stackLimit); p > stackLimit; p -= pageSize) {
         char ch = *p;
         *p = ch;
     }
+
+    // Glass: touching the pages also put them in memory: the whole stack (8 MB) of every thread that runs
+    // JavaScript, though scripts rarely go a fraction as deep. Give back the memory of the pages committed just now
+    // (they stay committed, and read as zero when first used), keeping well clear of the frames in use.
+    const uintptr_t margin = 256 * 1024;
+    uintptr_t begin = (reinterpret_cast<uintptr_t>(stackLimit) + 2 * pageSize) & ~static_cast<uintptr_t>(pageSize - 1);
+    uintptr_t end = std::min(reinterpret_cast<uintptr_t>(committedEnd), reinterpret_cast<uintptr_t>(&stackLimit) - margin) & ~static_cast<uintptr_t>(pageSize - 1);
+    if (end > begin)
+        DiscardVirtualMemory(reinterpret_cast<void*>(begin), end - begin);
 }
 #endif
 
