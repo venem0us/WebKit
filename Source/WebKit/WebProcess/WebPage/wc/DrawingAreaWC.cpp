@@ -560,15 +560,22 @@ RefPtr<WebCore::MediaPlayerCompositorFrameSink> DrawingAreaWC::createVideoFrameS
 }
 #endif
 
-void DrawingAreaWC::displayDidRefresh(MonotonicTime)
+void DrawingAreaWC::displayDidRefresh(MonotonicTime uiTime)
 {
 #if OS(WINDOWS)
     if (m_renderingStats) {
         auto nowUs = RenderingUpdateStats::now();
         if (auto start = m_renderingStats->updateStartUs.exchange(0))
             m_renderingStats->cycle.add(nowUs - start);
-        if (auto sent = m_renderingStats->uiSentUs.exchange(0))
+        if (auto sent = m_renderingStats->uiSentUs.exchange(0)) {
             m_renderingStats->ui.add(nowUs - sent);
+            // The UI process's reply carries the time it handled the update.
+            auto handledUs = static_cast<uint64_t>(uiTime.secondsSinceEpoch().microseconds());
+            if (handledUs >= sent && handledUs <= nowUs) {
+                m_renderingStats->uiHandle.add(handledUs - sent);
+                m_renderingStats->uiReturn.add(nowUs - handledUs);
+            }
+        }
         m_renderingStats->reportIfDue();
     }
 #endif
