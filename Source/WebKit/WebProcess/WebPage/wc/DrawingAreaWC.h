@@ -90,6 +90,7 @@ private:
     void updateRootLayers();
 #if OS(WINDOWS)
     void gpuProcessDidClose(GPUProcessConnectionIdentifier);
+    void updateLayerTreeHostFrozen();
 #endif
     void updateRootLayerDeviceScaleFactor(WebCore::GraphicsLayer&);
 
