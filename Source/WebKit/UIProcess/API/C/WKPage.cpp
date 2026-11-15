@@ -94,6 +94,8 @@
 #include "WebPageInspectorController.h"
 #include "WebPageMessages.h"
 #include "WebPageProxy.h"
+#include "ImageOptions.h"
+#include <WebCore/ShareableBitmap.h>
 #include "WebPageProxyTesting.h"
 #include "WebProcessPool.h"
 #include "WebProcessProxy.h"
@@ -2898,6 +2900,21 @@ void WKPageGetContentsAsMHTMLData(WKPageRef pageRef, void* context, WKPageGetCon
     UNUSED_PARAM(context);
     UNUSED_PARAM(callback);
 #endif
+}
+
+void WKPageTakeSnapshot(WKPageRef pageRef, WKRect rect, int pixelWidth, int pixelHeight, void* context, WKPageSnapshotFunction function)
+{
+    CRASH_IF_SUSPENDED;
+    WebKit::SnapshotOptions options { WebKit::SnapshotOption::Shareable, WebKit::SnapshotOption::InViewCoordinates, WebKit::SnapshotOption::ExcludeSelectionHighlighting };
+    protect(toImpl(pageRef))->takeSnapshotLegacy(WebKit::toIntRect(rect), { pixelWidth, pixelHeight }, options, [context, function](std::optional<WebCore::ShareableBitmap::Handle>&& handle) {
+        RefPtr bitmap = handle ? WebCore::ShareableBitmap::create(WTF::move(*handle), WebCore::SharedMemory::Protection::ReadOnly) : nullptr;
+        if (!bitmap) {
+            function(nullptr, 0, 0, 0, context);
+            return;
+        }
+        auto size = bitmap->size();
+        function(bitmap->span().data(), size.width(), size.height(), static_cast<int>(bitmap->bytesPerRow()), context);
+    });
 }
 
 void WKPageForceRepaint(WKPageRef pageRef, void* context, WKPageForceRepaintFunction callback)
