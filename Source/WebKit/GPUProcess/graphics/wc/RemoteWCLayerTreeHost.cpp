@@ -95,12 +95,14 @@ RemoteWCLayerTreeHost::~RemoteWCLayerTreeHost()
     remoteGraphicsStreamWorkQueue().dispatch([sceneContextHolder = WTF::move(sceneContextHolder), scene = WTF::move(m_scene)]() mutable {
         // Destroy scene on the StreamWorkQueue thread.
         scene = nullptr;
+        // sceneContextHolder can be destroyed on the StreamWorkQueue thread because it hasOneRef.
+        sceneContextHolder = nullptr;
 #if OS(WINDOWS)
-        // Its layers' textures and its cache of drawing threads' textures were deleted with its context current; nothing
-        // may be drawn after them for a long time (the page's process ended, the window shows a page that isn't composited).
+        // Its layers' textures, its cache of drawing threads' textures, and (when it was the window's last) its context
+        // with the window's surface are released; Direct3D destroys them at the next flush, and nothing may be drawn after
+        // them for a long time (the page's process ended, the window shows a page that isn't composited).
         WebCore::D3D11SharedTextures::flushReleasedTextures();
 #endif
-        // sceneContextHolder can be destroyed on the StreamWorkQueue thread because it hasOneRef.
     });
 }
 

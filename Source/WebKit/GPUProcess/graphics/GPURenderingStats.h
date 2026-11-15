@@ -208,7 +208,7 @@ public:
             // GPU raster's textures (GLASS_GPU_RASTER): now, the most during the window, the budget, the drawing
             // threads' EGL images still alive, what their pools hold and their Skia caches.
             auto memory = WebCore::D3D11SharedTextures::takeMemoryUse();
-            std::fprintf(file, " gpuMemory=%.1fMB gpuMemoryPeak=%.1fMB gpuMemoryBudget=%.0fMB gpuImages=%llu gpuPooled=%.1fMB skiaCache=%.1fMB releaseFlushes=%llu watchFlushes=%llu trims=%llu", memory.bytes / 1048576.0, memory.peakBytes / 1048576.0, memory.budgetBytes / 1048576.0, static_cast<unsigned long long>(memory.images), memory.pooledBytes / 1048576.0, memory.skiaCacheBytes / 1048576.0, static_cast<unsigned long long>(memory.releaseFlushes), static_cast<unsigned long long>(memory.watchFlushes), static_cast<unsigned long long>(memory.trims));
+            std::fprintf(file, " gpuMemory=%.1fMB gpuMemoryPeak=%.1fMB gpuMemoryBudget=%.0fMB gpuImages=%llu gpuPooled=%.1fMB skiaCache=%.1fMB releaseFlushes=%llu watchFlushes=%llu trims=%llu idlePurges=%llu", memory.bytes / 1048576.0, memory.peakBytes / 1048576.0, memory.budgetBytes / 1048576.0, static_cast<unsigned long long>(memory.images), memory.pooledBytes / 1048576.0, memory.skiaCacheBytes / 1048576.0, static_cast<unsigned long long>(memory.releaseFlushes), static_cast<unsigned long long>(memory.watchFlushes), static_cast<unsigned long long>(memory.trims), static_cast<unsigned long long>(memory.idlePurges));
 #endif
             std::fputc('\n', file);
             std::fflush(file);

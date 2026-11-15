@@ -21,6 +21,7 @@
 #include "ImageBufferBackend.h"
 #include "IntSize.h"
 #include <wrl/client.h>
+#include <wtf/Function.h>
 #include <wtf/TZoneMallocInlines.h>
 
 struct ID3D11Texture2D;
@@ -81,6 +82,11 @@ WEBCORE_EXPORT void finishedReading(uint64_t identifier);
 // never made a buffer.
 WEBCORE_EXPORT void releaseThreadResources();
 
+// Runs a task on the calling drawing thread (its rendering backend's work queue; dropped once that has stopped). Set by
+// the backend on its thread when it starts, so that the device watch thread can have a drawing thread that has drawn
+// nothing for a few seconds give back its Skia cache and pooled textures.
+WEBCORE_EXPORT void setThreadDispatcher(Function<void(Function<void()>&&)>&&);
+
 // Skia gets GPU contexts (PlatformDisplay::skiaGLContext) only once createSkiaBackend has been called in this process:
 // until then accelerated image buffers stay in software on Windows, as they always have.
 bool skiaGPUContextsEnabled();
@@ -117,6 +123,8 @@ struct MemoryUse {
     uint64_t releaseFlushes { 0 };
     uint64_t watchFlushes { 0 };
     uint64_t trims { 0 };
+    // Drawing threads that gave back their Skia cache and pooled textures after drawing nothing for a few seconds.
+    uint64_t idlePurges { 0 };
 };
 WEBCORE_EXPORT MemoryUse takeMemoryUse();
 

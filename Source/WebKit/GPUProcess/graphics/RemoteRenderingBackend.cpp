@@ -160,6 +160,12 @@ void RemoteRenderingBackend::workQueueInitialize()
     assertIsCurrent(workQueue());
     m_streamConnection->open(*this, m_workQueue.get());
     m_streamConnection->startReceivingMessages(*this, Messages::RemoteRenderingBackend::messageReceiverName(), m_renderingBackendIdentifier.toUInt64());
+#if USE(SKIA) && PLATFORM(WIN)
+    // So that this thread gives back its Skia cache and pooled textures once its page has drawn nothing for a while.
+    D3D11SharedTextures::setThreadDispatcher([workQueue = m_workQueue](Function<void()>&& task) {
+        workQueue->dispatch(WTF::move(task));
+    });
+#endif
 }
 
 void RemoteRenderingBackend::workQueueUninitialize()
