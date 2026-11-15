@@ -8375,7 +8375,7 @@ void WebPageProxy::didCreateSubframe(FrameIdentifier parentID, FrameIdentifier n
 
 void WebPageProxy::didDestroyFrame(IPC::Connection& connection, FrameIdentifier frameID)
 {
-#if ENABLE(WEB_AUTHN)
+#if ENABLE(WEB_AUTHN) && !PLATFORM(WIN) // Glass: on Windows the coordinator cancels its own request
     protect(protect(websiteDataStore())->authenticatorManager())->cancelRequest(webPageIDInMainFrameProcess(), frameID);
 #endif
     if (RefPtr automationSession = m_configuration->processPool().automationSession())
@@ -8834,7 +8834,7 @@ void WebPageProxy::didStartProvisionalLoadForFrameShared(Ref<WebProcessProxy>&& 
         m_navigationClient->didStartProvisionalLoadForFrame(*this, WTF::move(request), WTF::move(frameInfo));
     }
 
-#if ENABLE(WEB_AUTHN)
+#if ENABLE(WEB_AUTHN) && !PLATFORM(WIN)
     protect(protect(websiteDataStore())->authenticatorManager())->cancelRequest(m_webPageID, frameID);
 #endif
 }
@@ -14818,7 +14818,7 @@ void WebPageProxy::resetState(ResetStateReason resetStateReason)
     resetSpeechSynthesizer();
 #endif
 
-#if ENABLE(WEB_AUTHN)
+#if ENABLE(WEB_AUTHN) && !PLATFORM(WIN)
     protect(protect(websiteDataStore())->authenticatorManager())->cancelRequest(m_webPageID, std::nullopt);
 #endif
 
@@ -19002,7 +19002,11 @@ void WebPageProxy::decidePolicyForSOAuthorizationLoad(const String& extension, C
 #if ENABLE(WEB_AUTHN)
 void WebPageProxy::setMockWebAuthenticationConfiguration(MockWebAuthenticationConfiguration&& configuration)
 {
+#if PLATFORM(WIN)
+    UNUSED_PARAM(configuration); // Glass: no mock authenticators on Windows (test-only IPC)
+#else
     protect(websiteDataStore())->setMockWebAuthenticationConfiguration(WTF::move(configuration));
+#endif
 }
 #endif
 

@@ -161,6 +161,17 @@ private:
     RetainPtr<ASCAuthorizationRemotePresenter> m_presenter;
     RetainPtr<ASCAgentProxy> m_proxy;
 #endif // HAVE(UNIFIED_ASC_AUTH_UI)
+
+#if PLATFORM(WIN)
+    // Glass: requests go to Windows' WebAuthn API (webauthn.dll), which shows Windows' own dialogs (Windows Hello,
+    // phones, security keys) and blocks until they close, so it runs on a worker thread; one request at a time.
+    void performRequestOnWindows(WebAuthenticationRequestData&&, String&& relyingPartyIdentifier, RequestCompletionHandler&&);
+    void finishWindowsRequest(uint64_t requestID, const WebCore::AuthenticatorResponseData&, WebCore::AuthenticatorAttachment, const WebCore::ExceptionData&);
+    RequestCompletionHandler m_windowsCompletionHandler;
+    uint64_t m_windowsRequestID { 0 };
+    std::array<uint8_t, 16> m_windowsCancellationID { }; // a GUID, for WebAuthNCancelCurrentOperation
+    bool m_windowsHasCancellationID { false };
+#endif
     CompletionHandler<void()> m_cancelHandler;
 };
 

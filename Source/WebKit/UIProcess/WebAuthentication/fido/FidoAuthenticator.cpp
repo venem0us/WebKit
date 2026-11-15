@@ -27,7 +27,7 @@
 #include "FidoAuthenticator.h"
 #include <WebCore/WebAuthenticationUtils.h>
 
-#if ENABLE(WEB_AUTHN)
+#if ENABLE(WEB_AUTHN) && !PLATFORM(WIN) // Glass: Windows uses webauthn.dll (win/WebAuthenticatorCoordinatorProxyWin.cpp)
 
 #include "CtapDriver.h"
 

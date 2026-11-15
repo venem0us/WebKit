@@ -30,7 +30,9 @@
 
 #include "APIUIClient.h"
 #include "AuthenticatorManager.h"
+#if !PLATFORM(WIN) // Glass: Apple's platform authenticator; Windows uses webauthn.dll
 #include "LocalService.h"
+#endif
 #include "Logging.h"
 #include "RelatedOriginsValidator.h"
 #include "WebAuthenticationFlags.h"
@@ -65,9 +67,14 @@ WebAuthenticatorCoordinatorProxy::WebAuthenticatorCoordinatorProxy(WebPageProxy&
 
 WebAuthenticatorCoordinatorProxy::~WebAuthenticatorCoordinatorProxy()
 {
-#if HAVE(UNIFIED_ASC_AUTH_UI)
+#if HAVE(UNIFIED_ASC_AUTH_UI) || PLATFORM(WIN)
     cancel([]() { });
-#endif // HAVE(UNIFIED_ASC_AUTH_UI)
+#endif // HAVE(UNIFIED_ASC_AUTH_UI) || PLATFORM(WIN)
+#if PLATFORM(WIN)
+    // The tab closed with Windows' dialog up (now being cancelled): the request still gets its answer.
+    if (auto handler = std::exchange(m_windowsCompletionHandler, nullptr))
+        handler({ }, (AuthenticatorAttachment)0, ExceptionData { ExceptionCode::NotAllowedError, "The page was closed."_s });
+#endif
     if (RefPtr webPageProxy = m_webPageProxy.get())
         protect(webPageProxy->legacyMainFrameProcess())->removeMessageReceiver(Messages::WebAuthenticatorCoordinatorProxy::messageReceiverName(), webPageProxy->webPageIDInMainFrameProcess());
 }
@@ -171,6 +178,13 @@ void WebAuthenticatorCoordinatorProxy::handleRequest(WebAuthenticationRequestDat
         if (!protectedThis)
             return handler({ }, AuthenticatorAttachment::Platform, ExceptionData { ExceptionCode::InvalidStateError });
 
+#if PLATFORM(WIN)
+        // Glass: Windows' WebAuthn API does the whole ceremony (as AuthenticationServices does on Apple
+        // platforms); WebKit's own authenticators (USB/NFC drivers, mocks) aren't built on Windows.
+        if (!result)
+            return handler({ }, (AuthenticatorAttachment)0, ExceptionData { ExceptionCode::NotAllowedError, "This request has been cancelled by the user."_s });
+        protectedThis->performRequest(WTF::move(data), WTF::move(handler));
+#else
         Ref authenticatorManager = protectedThis->m_webPageProxy->websiteDataStore().authenticatorManager();
         if (result) {
 #if HAVE(UNIFIED_ASC_AUTH_UI) || HAVE(WEB_AUTHN_AS_MODERN)
@@ -218,10 +232,16 @@ void WebAuthenticatorCoordinatorProxy::handleRequest(WebAuthenticationRequestDat
             handler({ }, (AuthenticatorAttachment)0, ExceptionData { ExceptionCode::NotAllowedError, "This request has been cancelled by the user."_s });
             RELEASE_LOG_ERROR(WebAuthn, "Request cancelled due to rejected prompt after lack of user gesture.");
         }
+#endif // PLATFORM(WIN)
     };
 
+#if PLATFORM(WIN)
+    bool isTestManager = false;
+#else
     Ref authenticatorManager = m_webPageProxy->websiteDataStore().authenticatorManager();
-    if (shouldRequestConditionalRegistration && !authenticatorManager->isMock() && !authenticatorManager->isVirtual()) {
+    bool isTestManager = authenticatorManager->isMock() || authenticatorManager->isVirtual();
+#endif
+    if (shouldRequestConditionalRegistration && !isTestManager) {
         auto callDelegateWithOrigins = [weakThis = WeakPtr { *this }, username, afterConsent = WTF::move(afterConsent), origin = origin->securityOrigin()](Vector<String>&& origins) mutable {
             RefPtr protectedThis = weakThis.get();
             if (!protectedThis)
@@ -262,7 +282,7 @@ void WebAuthenticatorCoordinatorProxy::handleRequest(WebAuthenticationRequestDat
 }
 
 
-#if !HAVE(UNIFIED_ASC_AUTH_UI) && !HAVE(WEB_AUTHN_AS_MODERN)
+#if !HAVE(UNIFIED_ASC_AUTH_UI) && !HAVE(WEB_AUTHN_AS_MODERN) && !PLATFORM(WIN) // Windows: win/WebAuthenticatorCoordinatorProxyWin.cpp
 void WebAuthenticatorCoordinatorProxy::cancel(CompletionHandler<void()>&& completionHandler)
 {
     completionHandler();
@@ -277,7 +297,7 @@ void WebAuthenticatorCoordinatorProxy::isConditionalMediationAvailable(IPC::Conn
 {
     handler(false);
 }
-#endif // !HAVE(UNIFIED_ASC_AUTH_UI) && !HAVE(WEB_AUTHN_AS_MODERN)
+#endif // !HAVE(UNIFIED_ASC_AUTH_UI) && !HAVE(WEB_AUTHN_AS_MODERN) && !PLATFORM(WIN)
 
 #if HAVE(WEB_AUTHN_AS_MODERN)
 
