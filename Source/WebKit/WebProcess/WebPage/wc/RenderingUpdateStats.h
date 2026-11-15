@@ -93,6 +93,8 @@ public:
     std::atomic<uint64_t> deferredTriggers { 0 };   // render requests made while an update was still in flight
     std::atomic<uint64_t> compositedUpdates { 0 };  // accelerated-compositing updates (vs. painting the whole view)
     Duration web;          // main thread: updateRendering() (style, layout, paint recording, layer flush)
+    Duration page;         //   of which the page's update: rAF callbacks and other script, style, layout
+    Duration flush;        //   of which finalizing: compositing layer flush and paint recording
     Duration gpuPaint;     // waiting for the GPU process to draw this update's recorded tiles (the fence)
     Duration hop;          // commit queue back to the main thread
     Duration compositor;   // GPU process compositing the layer tree (update request -> reply)
@@ -108,9 +110,11 @@ public:
         }
         if (nowUs - m_lastReportUs < 1000000)
             return;
-        double cycleAvg, cycleMax, webAvg, webMax, paintAvg, paintMax, hopAvg, hopMax, compAvg, compMax, uiAvg, uiMax;
+        double cycleAvg, cycleMax, webAvg, webMax, pageAvg, pageMax, flushAvg, flushMax, paintAvg, paintMax, hopAvg, hopMax, compAvg, compMax, uiAvg, uiMax;
         cycle.take(cycleAvg, cycleMax);
         web.take(webAvg, webMax);
+        page.take(pageAvg, pageMax);
+        flush.take(flushAvg, flushMax);
         gpuPaint.take(paintAvg, paintMax);
         hop.take(hopAvg, hopMax);
         compositor.take(compAvg, compMax);
@@ -118,11 +122,11 @@ public:
         auto window = (nowUs - m_lastReportUs) / 1000.0;
         m_lastReportUs = nowUs;
         if (auto* file = openLog()) {
-            std::fprintf(file, "+%.1fs window=%.0fms updates=%llu composited=%llu deferredTriggers=%llu cycle avg=%.1f max=%.1fms web avg=%.1f max=%.1fms gpuPaint avg=%.1f max=%.1fms hop avg=%.1f max=%.1fms compositor avg=%.1f max=%.1fms ui avg=%.1f max=%.1fms\n",
+            std::fprintf(file, "+%.1fs window=%.0fms updates=%llu composited=%llu deferredTriggers=%llu cycle avg=%.1f max=%.1fms web avg=%.1f max=%.1fms (page avg=%.1f max=%.1fms flush avg=%.1f max=%.1fms) gpuPaint avg=%.1f max=%.1fms hop avg=%.1f max=%.1fms compositor avg=%.1f max=%.1fms ui avg=%.1f max=%.1fms\n",
                 (nowUs - m_createdUs) / 1000000.0, window,
                 static_cast<unsigned long long>(updates.exchange(0)), static_cast<unsigned long long>(compositedUpdates.exchange(0)),
                 static_cast<unsigned long long>(deferredTriggers.exchange(0)),
-                cycleAvg, cycleMax, webAvg, webMax, paintAvg, paintMax, hopAvg, hopMax, compAvg, compMax, uiAvg, uiMax);
+                cycleAvg, cycleMax, webAvg, webMax, pageAvg, pageMax, flushAvg, flushMax, paintAvg, paintMax, hopAvg, hopMax, compAvg, compMax, uiAvg, uiMax);
             std::fflush(file);
         }
     }

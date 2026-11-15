@@ -274,10 +274,19 @@ void DrawingAreaWC::updateRendering()
     Ref webPage = m_webPage.get();
     webPage->updateRendering();
     webPage->flushPendingEditorStateUpdate();
+#if OS(WINDOWS)
+    uint64_t pageDoneUs = m_renderingStats ? RenderingUpdateStats::now() : 0;
+    if (m_renderingStats && m_renderingStats->updateStartUs)
+        m_renderingStats->page.add(pageDoneUs - m_renderingStats->updateStartUs);
+#endif
 
     OptionSet<FinalizeRenderingUpdateFlags> flags;
     webPage->finalizeRenderingUpdate(flags);
     webPage->didUpdateRendering();
+#if OS(WINDOWS)
+    if (m_renderingStats && pageDoneUs)
+        m_renderingStats->flush.add(RenderingUpdateStats::now() - pageDoneUs);
+#endif
 
     willStartRenderingUpdateDisplay();
 
