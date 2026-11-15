@@ -125,6 +125,11 @@
 #include "RenderMediaInlines.h"
 #include "RenderTheme.h"
 #include "RenderVideo.h"
+#if OS(WINDOWS)
+#include "GraphicsLayer.h"
+#include "RenderLayer.h"
+#include "RenderLayerBacking.h"
+#endif
 #include "RenderView.h"
 #include "ResourceLoadInfo.h"
 #include "PlatformScreen.h"
@@ -6521,8 +6526,17 @@ void HTMLMediaElement::mediaPlayerResourceNotSupported()
 void HTMLMediaElement::mediaPlayerRepaint()
 {
     beginProcessingMediaPlayerCallback();
-    if (CheckedPtr renderer = this->renderer())
+    if (CheckedPtr renderer = this->renderer()) {
         renderer->repaint();
+#if OS(WINDOWS)
+        // A composited video takes its frames from the player when its layer is flushed (there is no platform layer
+        // that updates itself), so a new frame has to mark the layer's contents as changed.
+        if (CheckedPtr video = dynamicDowncast<RenderVideo>(*renderer); video && video->hasLayer()) {
+            if (auto* backing = video->layer()->backing())
+                backing->graphicsLayer()->setContentsNeedsDisplay();
+        }
+#endif
+    }
     endProcessingMediaPlayerCallback();
 }
 

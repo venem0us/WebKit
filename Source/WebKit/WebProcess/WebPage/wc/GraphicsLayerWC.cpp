@@ -27,11 +27,16 @@
 #include "config.h"
 #include "GraphicsLayerWC.h"
 
+#include "RenderingUpdateStats.h"
+
 #if USE(GRAPHICS_LAYER_WC)
 
 #include "WCPlatformLayerGCGL.h"
 #include "WCTileGrid.h"
 #include <WebCore/GraphicsContext.h>
+#include <WebCore/MediaPlayer.h>
+#include <WebCore/NativeImage.h>
+#include <WebCore/ShareableBitmap.h>
 #include <WebCore/TransformState.h>
 #include <wtf/TZoneMallocInlines.h>
 
@@ -48,6 +53,10 @@ public:
     bool paintAndFlush(WCLayerUpdateInfo& update)
     {
         bool repainted = false;
+#if OS(WINDOWS)
+        uint64_t repaintedPixels = 0;
+        unsigned repaintedTiles = 0;
+#endif
         for (auto& entry : m_tileGrid.tiles()) {
             auto& tile = *entry.value;
             WCTileUpdate tileUpdate;
@@ -62,6 +71,10 @@ public:
             repainted = true;
             float deviceScaleFactor = m_owner.deviceScaleFactor();
             auto& dirtyRect = tile.dirtyRect();
+#if OS(WINDOWS)
+            repaintedPixels += static_cast<uint64_t>(dirtyRect.width()) * dirtyRect.height();
+            ++repaintedTiles;
+#endif
             IntRect scaledDirtyRect = dirtyRect;
             scaledDirtyRect.scale(deviceScaleFactor);
             tileUpdate.dirtyRect = scaledDirtyRect;
@@ -74,6 +87,10 @@ public:
             update.background.tileUpdates.append(WTF::move(tileUpdate));
         }
         m_tileGrid.clearDirtyRects();
+#if OS(WINDOWS)
+        if (repaintedPixels >= 400000)
+            RenderingUpdateStats::noteLargeRepaint(reinterpret_cast<const char*>(m_owner.debugName().utf8().data()), repaintedPixels, repaintedTiles, static_cast<int>(m_owner.size().width()), static_cast<int>(m_owner.size().height()));
+#endif
         return repainted;
     }
 
@@ -445,8 +462,29 @@ void GraphicsLayerWC::setContentsDisplayDelegate(RefPtr<WebCore::GraphicsLayerCo
     setContentsToPlatformLayer(platformLayer, purpose);
 }
 
+#if ENABLE(VIDEO)
+void GraphicsLayerWC::setContentsToMediaPlayer(MediaPlayer* player, ContentsLayerPurpose purpose)
+{
+    if (player && player->platformLayer()) {
+        GraphicsLayer::setContentsToMediaPlayer(player, purpose);
+        return;
+    }
+    // A player that supports accelerated rendering without a platform layer gives this layer its frames instead.
+    RefPtr<MediaPlayer> mediaPlayer = player && player->supportsAcceleratedRendering() ? player : nullptr;
+    if (m_mediaPlayer == mediaPlayer)
+        return;
+    m_mediaPlayer = WTF::move(mediaPlayer);
+    m_lastVideoFrame = nullptr;
+    noteLayerPropertyChanged(WCLayerChange::PlatformLayer);
+}
+#endif
+
 bool GraphicsLayerWC::usesContentsLayer() const
 {
+#if ENABLE(VIDEO)
+    if (m_mediaPlayer)
+        return true;
+#endif
     return m_platformLayer;
 }
 
@@ -477,7 +515,27 @@ void GraphicsLayerWC::setShowRepaintCounter(bool show)
 
 static bool filtersCanBeComposited(const FilterOperations& filters)
 {
-    return !filters.isEmpty();
+    if (filters.isEmpty())
+        return false;
+    // Only the filters TextureMapper can draw; anything else (an SVG reference filter) is painted in software.
+    for (auto& operation : filters) {
+        switch (operation->type()) {
+        case FilterOperation::Type::Grayscale:
+        case FilterOperation::Type::Sepia:
+        case FilterOperation::Type::Saturate:
+        case FilterOperation::Type::HueRotate:
+        case FilterOperation::Type::Invert:
+        case FilterOperation::Type::Brightness:
+        case FilterOperation::Type::Contrast:
+        case FilterOperation::Type::Opacity:
+        case FilterOperation::Type::DropShadow:
+        case FilterOperation::Type::Blur:
+            break;
+        default:
+            return false;
+        }
+    }
+    return true;
 }
 
 bool GraphicsLayerWC::setFilters(const FilterOperations& filters)
@@ -627,6 +685,21 @@ void GraphicsLayerWC::flushCompositingStateForThisLayerOnly()
 #if ENABLE(WEBGL)
         if (m_platformLayer)
             update.platformLayer.identifiers = static_cast<WCPlatformLayerGCGL*>(m_platformLayer)->takeContentBufferIdentifiers();
+#endif
+#if ENABLE(VIDEO)
+        if (m_mediaPlayer) {
+            update.platformLayer.hasLayer = true;
+            // Send the frame only when it changed; the compositor keeps showing the last one it received.
+            RefPtr frame = m_mediaPlayer->imageForCompositing();
+            if (frame && frame != m_lastVideoFrame) {
+                if (RefPtr bitmap = ShareableBitmap::createFromImageDraw(*frame, frame->colorSpace())) {
+                    WCBackingStore store;
+                    store.setBitmap(WTF::move(bitmap));
+                    update.platformLayer.videoFrame = WTF::move(store);
+                    m_lastVideoFrame = WTF::move(frame);
+                }
+            }
+        }
 #endif
     }
     if (update.changes & WCLayerChange::RemoteFrame)

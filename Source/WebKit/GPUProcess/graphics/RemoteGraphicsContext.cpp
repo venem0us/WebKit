@@ -31,6 +31,7 @@
 #include "GPUConnectionToWebProcess.h"
 #include "ImageBufferShareableAllocator.h"
 #include "Logging.h"
+#include "GPURenderingStats.h"
 #include "RemoteGraphicsContextMessages.h"
 #include "RemoteImageBuffer.h"
 #include "RemoteSharedResourceCache.h"
@@ -373,6 +374,9 @@ void RemoteGraphicsContext::drawFilteredImageBufferInternal(std::optional<Render
 
 void RemoteGraphicsContext::drawFilteredImageBuffer(std::optional<RenderingResourceIdentifier> sourceImageIdentifier, const FloatRect& sourceImageRect, Ref<Filter>&& filter)
 {
+#if OS(WINDOWS)
+    GPU_RENDERING_STATS_SCOPE(filter);
+#endif
     RefPtr svgFilter = dynamicDowncast<SVGFilterRenderer>(filter);
 
     if (!svgFilter || !svgFilter->hasValidRenderingResourceIdentifier()) {
@@ -414,6 +418,9 @@ void RemoteGraphicsContext::drawGlyphs(RenderingResourceIdentifier fontIdentifie
 
 void RemoteGraphicsContext::drawImageBuffer(RenderingResourceIdentifier imageBufferIdentifier, const FloatRect& destinationRect, const FloatRect& srcRect, ImagePaintingOptions options)
 {
+#if OS(WINDOWS)
+    GPU_RENDERING_STATS_SCOPE(imageBuffer);
+#endif
     RefPtr sourceImage = imageBuffer(imageBufferIdentifier);
     MESSAGE_CHECK(sourceImage);
     context().drawImageBuffer(*sourceImage, destinationRect, srcRect, options);
@@ -422,6 +429,9 @@ void RemoteGraphicsContext::drawImageBuffer(RenderingResourceIdentifier imageBuf
 
 void RemoteGraphicsContext::drawDisplayList(RemoteDisplayListIdentifier identifier)
 {
+#if OS(WINDOWS)
+    GPU_RENDERING_STATS_SCOPE(displayList);
+#endif
     RefPtr displayList = resourceCache().cachedDisplayList(identifier);
     MESSAGE_CHECK(displayList);
     context().drawDisplayList(*displayList, controlFactory());
@@ -431,6 +441,21 @@ void RemoteGraphicsContext::drawNativeImage(RenderingResourceIdentifier imageIde
 {
     RefPtr image = resourceCache().cachedNativeImage(imageIdentifier);
     MESSAGE_CHECK(image);
+#if OS(WINDOWS)
+    if (auto* stats = GPURenderingStats::singletonIfEnabled()) {
+        auto size = image->size();
+        bool large = size.width() >= 256 && size.height() >= 256;
+        if (large) {
+            auto ctm = context().getCTM();
+            stats->noteLargeDraw(size.width(), size.height(), srcRect.width(), srcRect.height(), destRect.width(), destRect.height(), static_cast<float>(ctm.xScale()), context().renderingMode() == RenderingMode::Accelerated,
+                static_cast<int>(options.interpolationQuality() == InterpolationQuality::Default ? context().imageInterpolationQuality() : options.interpolationQuality()),
+                context().clipBounds().width(), context().clipBounds().height());
+        }
+        GPURenderingStats::ScopedTimer timer(large ? &stats->drawLargeImage : &stats->drawSmallImage);
+        context().drawNativeImage(*image, destRect, srcRect, options);
+        return;
+    }
+#endif
     context().drawNativeImage(*image, destRect, srcRect, options);
 }
 
@@ -474,6 +499,9 @@ void RemoteGraphicsContext::beginTransparencyLayerWithCompositeMode(CompositeMod
 
 void RemoteGraphicsContext::endTransparencyLayer()
 {
+#if OS(WINDOWS)
+    GPU_RENDERING_STATS_SCOPE(transparencyLayer);
+#endif
     context().endTransparencyLayer();
 }
 
@@ -519,21 +547,33 @@ void RemoteGraphicsContext::drawFocusRingRects(const Vector<FloatRect>& rects, f
 
 void RemoteGraphicsContext::fillRect(const FloatRect& rect, GraphicsContext::RequiresClipToRect requiresClipToRect)
 {
+#if OS(WINDOWS)
+    GPU_RENDERING_STATS_SCOPE(fill);
+#endif
     context().fillRect(rect, requiresClipToRect);
 }
 
 void RemoteGraphicsContext::fillRectWithColor(const FloatRect& rect, const Color& color)
 {
+#if OS(WINDOWS)
+    GPU_RENDERING_STATS_SCOPE(fill);
+#endif
     context().fillRect(rect, color);
 }
 
 void RemoteGraphicsContext::fillRectWithGradient(const FloatRect& rect, Ref<Gradient>&& gradient)
 {
+#if OS(WINDOWS)
+    GPU_RENDERING_STATS_SCOPE(fill);
+#endif
     context().fillRect(rect, gradient);
 }
 
 void RemoteGraphicsContext::fillRectWithGradientAndSpaceTransform(const FloatRect& rect, Ref<Gradient>&& gradient, const AffineTransform& transform, GraphicsContext::RequiresClipToRect requiresClipToRect)
 {
+#if OS(WINDOWS)
+    GPU_RENDERING_STATS_SCOPE(fill);
+#endif
     context().fillRect(rect, gradient, transform, requiresClipToRect);
 }
 

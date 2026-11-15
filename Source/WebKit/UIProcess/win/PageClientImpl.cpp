@@ -308,24 +308,22 @@ void PageClientImpl::setFullScreenClientForTesting(std::unique_ptr<WebFullScreen
 
 void PageClientImpl::closeFullScreenManager()
 {
-    notImplemented();
+    m_view.exitFullScreen();
 }
 
 bool PageClientImpl::isFullScreen()
 {
-    notImplemented();
-    return false;
+    return m_view.isFullScreen();
 }
 
 void PageClientImpl::enterFullScreen(FloatSize, CompletionHandler<void(bool)>&& completionHandler)
 {
-    notImplemented();
-    completionHandler(false);
+    completionHandler(m_view.enterFullScreen());
 }
 
 void PageClientImpl::exitFullScreen(CompletionHandler<void()>&& completionHandler)
 {
-    notImplemented();
+    m_view.exitFullScreen();
     completionHandler();
 }
 

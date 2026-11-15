@@ -553,6 +553,7 @@ public:
 
     RefPtr<VideoFrame> videoFrameForCurrentTime();
     RefPtr<NativeImage> nativeImageForCurrentTime();
+    RefPtr<NativeImage> imageForCompositing();
     RefPtr<ShareableBitmap> bitmapImageForCurrentTimeSync();
     using BitmapImagePromise = NativePromise<Ref<ShareableBitmap>, void>;
     Ref<BitmapImagePromise> bitmapImageForCurrentTime();

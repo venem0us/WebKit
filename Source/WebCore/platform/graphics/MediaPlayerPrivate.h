@@ -210,6 +210,9 @@ public:
 
     virtual RefPtr<VideoFrame> videoFrameForCurrentTime();
     virtual RefPtr<NativeImage> nativeImageForCurrentTime() { return nullptr; }
+    // The frame to show in the video's compositing layer, for players without a platform layer that still support
+    // accelerated rendering by handing frames to the compositor (Windows GStreamer). Counts as presenting the frame.
+    virtual RefPtr<NativeImage> imageForCompositing() { return nullptr; }
     WEBCORE_EXPORT virtual RefPtr<ShareableBitmap> bitmapImageForCurrentTimeSync();
     using BitmapImagePromise = MediaPlayer::BitmapImagePromise;
     WEBCORE_EXPORT virtual Ref<BitmapImagePromise> bitmapImageForCurrentTime();

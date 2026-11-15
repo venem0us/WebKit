@@ -66,6 +66,14 @@ public:
     PlatformDisplayID displayID() const { return m_displayID; }
 
     static RefPtr<DisplayRefreshMonitor> createDefaultDisplayRefreshMonitor(PlatformDisplayID);
+
+#if PLATFORM(WIN)
+    // True while a display tick is being delivered on the main thread, at the top of the run loop
+    // (not nested in layout or script), so a rendering update can run right away.
+    WEBCORE_EXPORT static bool isDeliveringDisplayTick();
+    // Adds a drawing-area event to the display clock's trace (see DisplayRefreshMonitorWin::writeTrace()).
+    WEBCORE_EXPORT static void traceRenderingEvent(char type);
+#endif
     WEBCORE_EXPORT virtual void displayLinkFired(const DisplayUpdate&);
 
 protected:

@@ -1274,6 +1274,13 @@ IGNORE_WARNINGS_END
             auto& clientName = getApplicationName();
             g_object_set(object, "client-name", clientName.ascii().data(), nullptr);
         }
+#if OS(WINDOWS)
+        // WASAPI2 can fail mid-stream (AUDCLNT_E_BUFFER_TOO_LARGE on live Twitch), mark the device invalidated and
+        // post a fatal error, which ends playback (Twitch then shows Error #2000). Keep the pipeline running instead:
+        // the sink goes on consuming audio (silently, if the device can't be used) and posts a warning.
+        if (g_object_class_find_property(objectClass, "continue-on-error"))
+            g_object_set(object, "continue-on-error", TRUE, nullptr);
+#endif
     }), role.isolatedCopy().releaseImpl().leakRef(), static_cast<GClosureNotify>([](gpointer userData, GClosure*) {
         if (auto* roleImpl = reinterpret_cast<StringImpl*>(userData))
             roleImpl->deref();

@@ -1244,6 +1244,11 @@ RefPtr<NativeImage> MediaPlayer::nativeImageForCurrentTime()
     return protect(m_private)->nativeImageForCurrentTime();
 }
 
+RefPtr<NativeImage> MediaPlayer::imageForCompositing()
+{
+    return protect(m_private)->imageForCompositing();
+}
+
 RefPtr<ShareableBitmap> MediaPlayer::bitmapImageForCurrentTimeSync()
 {
     return protect(m_private)->bitmapImageForCurrentTimeSync();

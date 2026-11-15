@@ -44,8 +44,14 @@ WCBackingStore::WCBackingStore(std::optional<ImageBufferBackendHandle>&& handle)
 
 std::optional<ImageBufferBackendHandle> WCBackingStore::handle() const
 {
-    if (!m_imageBuffer)
+    if (!m_imageBuffer) {
+        if (m_bitmap) {
+            // Read-write like an image buffer's handle: the receiving constructor maps it read-write.
+            if (auto handle = m_bitmap->createHandle())
+                return ImageBufferBackendHandle { WTF::move(*handle) };
+        }
         return std::nullopt;
+    }
 
     auto* sharing = m_imageBuffer->toBackendSharing();
     if (!is<ImageBufferBackendHandleSharing>(sharing))

@@ -28,6 +28,7 @@
 
 #if ENABLE(GPU_PROCESS)
 
+#include "GPURenderingStats.h"
 #include "IPCSemaphore.h"
 #include "ImageBufferBackendHandleSharing.h"
 #include "Logging.h"
@@ -208,14 +209,26 @@ void RemoteImageBuffer::flushContext()
 {
     MESSAGE_CHECK(m_flushSignal, "Cannot flush context without a valid flush signal. Use FlushContextSync for synchronous flushing.");
     assertIsCurrent(workQueue());
-    m_imageBuffer->flushDrawingContext();
+    {
+#if OS(WINDOWS)
+        auto* stats = GPURenderingStats::singletonIfEnabled();
+        GPURenderingStats::ScopedTimer timer(stats ? &stats->flushTile : nullptr);
+#endif
+        m_imageBuffer->flushDrawingContext();
+    }
     m_flushSignal->signal();
 }
 
 void RemoteImageBuffer::flushContextSync(CompletionHandler<void()>&& completionHandler)
 {
     assertIsCurrent(workQueue());
-    m_imageBuffer->flushDrawingContext();
+    {
+#if OS(WINDOWS)
+        auto* stats = GPURenderingStats::singletonIfEnabled();
+        GPURenderingStats::ScopedTimer timer(stats ? &stats->flushTile : nullptr);
+#endif
+        m_imageBuffer->flushDrawingContext();
+    }
     completionHandler();
 }
 

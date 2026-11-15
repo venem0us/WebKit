@@ -128,6 +128,9 @@ private:
     bool isTimeBuffered(const MediaTime&) const;
 
     bool isMediaSource() const override { return true; }
+#if OS(WINDOWS)
+    MediaTime bufferedEndForStats() const override { return m_mediaSourcePrivate ? m_mediaSourcePrivate->buffered().maximumBufferedTime() : MediaTime::invalidTime(); }
+#endif
 
     void propagateReadyStateToPlayer();
 

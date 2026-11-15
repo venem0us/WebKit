@@ -193,6 +193,9 @@ public:
     bool supportsAcceleratedRendering() const override { return true; }
     void setPlatformLayerBufferProxy(Ref<CoordinatedPlatformLayerBufferProxy>&&) override;
     RefPtr<CoordinatedPlatformLayerBufferProxy> platformLayerBufferProxy() const override;
+#elif OS(WINDOWS)
+    bool supportsAcceleratedRendering() const override;
+    RefPtr<NativeImage> imageForCompositing() override;
 #endif
 
 #if ENABLE(ENCRYPTED_MEDIA)
@@ -644,6 +647,10 @@ private:
     GRefPtr<GstElement> m_downloadBuffer;
 
     virtual bool isMediaSource() const { return false; }
+#if OS(WINDOWS)
+    // Video stats: the end of what the page has buffered (the MediaSource's ranges for MSE, whose buffered() is empty).
+    virtual MediaTime bufferedEndForStats() const { return buffered().maximumBufferedTime(); }
+#endif
 
     uint64_t m_httpResponseTotalSize { 0 };
     uint64_t m_networkReadPosition { 0 };
@@ -663,6 +670,19 @@ private:
 
     uint64_t m_sampleCount { 0 };
     uint64_t m_lastVideoFrameMetadataSampleCount { 0 };
+#if OS(WINDOWS)
+    // The software paint path presents frames by painting them: the last painted sample backs
+    // requestVideoFrameCallback metadata, and painting a new one advances m_sampleCount.
+    GRefPtr<GstSample> m_lastPaintedSample WTF_GUARDED_BY_LOCK(m_sampleMutex);
+    // The image of m_lastPaintedSample (main thread only). A video spanning several tiles is painted once per tile;
+    // reusing one image converts and copies each frame once, and lets the GPU process cache it once.
+    RefPtr<NativeImage> m_lastPaintedImage;
+    // The sample paint() draws, latched by repaint() on the main thread. Frames keep arriving while a page update
+    // paints its tiles one after another; drawing m_sample directly could show a different frame in each tile.
+    GRefPtr<GstSample> m_sampleForPaint WTF_GUARDED_BY_LOCK(m_sampleMutex);
+    double m_sampleArrivalTime WTF_GUARDED_BY_LOCK(m_sampleMutex) { 0 }; // when m_sample arrived (MonotonicTime seconds)
+    RefPtr<NativeImage> presentedImage(bool isPainting);
+#endif
     mutable PlatformTimeRanges m_buffered;
 #if !RELEASE_LOG_DISABLED
     const Ref<const Logger> m_logger;

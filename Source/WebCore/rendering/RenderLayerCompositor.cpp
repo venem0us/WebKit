@@ -2844,7 +2844,14 @@ bool RenderLayerCompositor::canAccelerateVideoRendering(RenderVideo& video) cons
     if (!m_hasAcceleratedCompositing)
         return false;
 
+#if OS(WINDOWS)
+    // The GStreamer player paints frames in software here, but a video in its own layer still pays off: a new frame
+    // repaints only that layer's backing store, not the page content around and over the video (on video sites,
+    // the controls, gradients and titles drawn on top of it), which otherwise costs as much as the frame itself.
+    return true;
+#else
     return video.supportsAcceleratedRendering();
+#endif
 }
 #endif
 

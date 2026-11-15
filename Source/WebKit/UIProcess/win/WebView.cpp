@@ -37,6 +37,7 @@
 #include "WebContextMenuProxyWin.h"
 #include "WebEditCommandProxy.h"
 #include "WebEventFactory.h"
+#include "WebFullScreenManagerProxy.h"
 #include "WebKitDLL.h"
 #include "WebPageGroup.h"
 #include "WebPageProxy.h"
@@ -458,6 +459,14 @@ LRESULT WebView::onVerticalScroll(HWND hWnd, UINT message, WPARAM wParam, LPARAM
 
 LRESULT WebView::onKeyEvent(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam, bool& handled)
 {
+    // Esc leaves element full screen, as in other browsers. Keys go to this window, not the embedder's.
+    if (m_isFullScreen && wParam == VK_ESCAPE && (message == WM_KEYDOWN || message == WM_KEYUP)) {
+        if (message == WM_KEYDOWN)
+            requestExitFullScreen();
+        handled = true;
+        return 0;
+    }
+
     Vector<MSG> pendingCharEvents;
     if (message == WM_KEYDOWN) {
         MSG msg;
@@ -843,6 +852,45 @@ void WebView::setIsInWindow(bool isInWindow)
     m_isInWindow = isInWindow;
     if (m_page)
         m_page->activityStateDidChange(ActivityState::IsInWindow);
+}
+
+void WebView::setFullScreenCallbacks(WKViewEnterFullScreenCallback enterFullScreen, WKViewExitFullScreenCallback exitFullScreen, const void* clientInfo)
+{
+    m_enterFullScreenCallback = enterFullScreen;
+    m_exitFullScreenCallback = exitFullScreen;
+    m_fullScreenClientInfo = clientInfo;
+}
+
+bool WebView::enterFullScreen()
+{
+    if (m_isFullScreen)
+        return true;
+    if (!m_enterFullScreenCallback || !m_enterFullScreenCallback(toAPI(this), m_fullScreenClientInfo))
+        return false;
+    m_isFullScreen = true;
+    return true;
+}
+
+void WebView::exitFullScreen()
+{
+    if (!m_isFullScreen)
+        return;
+    m_isFullScreen = false;
+    if (m_exitFullScreenCallback)
+        m_exitFullScreenCallback(toAPI(this), m_fullScreenClientInfo);
+}
+
+void WebView::requestExitFullScreen()
+{
+    if (!m_isFullScreen || !m_page)
+        return;
+#if ENABLE(FULLSCREEN_API)
+    if (auto* manager = m_page->fullScreenManager()) {
+        manager->requestExitFullScreen();
+        return;
+    }
+#endif
+    exitFullScreen();
 }
 
 void WebView::setIsVisible(bool isVisible)

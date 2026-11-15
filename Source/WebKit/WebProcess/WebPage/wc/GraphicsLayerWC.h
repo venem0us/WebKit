@@ -89,6 +89,9 @@ public:
     void setContentsToPlatformLayer(PlatformLayer*, ContentsLayerPurpose) override;
     void setContentsToPlatformLayerHost(WebCore::LayerHostingContextIdentifier) override;
     void setContentsDisplayDelegate(RefPtr<WebCore::GraphicsLayerContentsDisplayDelegate>&&, ContentsLayerPurpose) override;
+#if ENABLE(VIDEO)
+    void setContentsToMediaPlayer(WebCore::MediaPlayer*, ContentsLayerPurpose) override;
+#endif
     bool canDirectlyCompositeNativeImage() const override { return false; }
     bool usesContentsLayer() const override;
     void setShowDebugBorder(bool) override;
@@ -130,6 +133,11 @@ private:
     Observer* m_observer;
     const std::unique_ptr<WCTiledBacking> m_tiledBacking;
     PlatformLayer* m_platformLayer { nullptr };
+#if ENABLE(VIDEO)
+    // A video whose frames this layer hands to the compositor (players without a platform layer).
+    RefPtr<WebCore::MediaPlayer> m_mediaPlayer;
+    RefPtr<WebCore::NativeImage> m_lastVideoFrame;
+#endif
     Markable<WebCore::LayerHostingContextIdentifier> m_hostIdentifier;
     WebCore::Color m_solidColor;
     WebCore::Color m_debugBorderColor;
