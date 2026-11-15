@@ -3580,7 +3580,7 @@ std::optional<WebPageProxyIdentifier> WebProcessProxy::remoteWorkerPageProxyID(R
     return workerInformation->remoteWorkerPageProxyID;
 }
 
-#if !USE(GLIB)
+#if !USE(GLIB) || OS(WINDOWS)
 void WebProcessProxy::systemBeep()
 {
     PAL::systemBeep();

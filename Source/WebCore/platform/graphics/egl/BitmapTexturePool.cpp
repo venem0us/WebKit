@@ -33,7 +33,7 @@
 #include <wtf/MainThread.h>
 #include <wtf/TZoneMallocInlines.h>
 
-#if USE(GLIB)
+#if USE(GLIB_EVENT_LOOP)
 #include <wtf/glib/RunLoopSourcePriority.h>
 #endif
 
@@ -63,7 +63,7 @@ BitmapTexturePool::BitmapTexturePool()
     , m_releaseUnusedSecondsTolerance(s_releaseUnusedSecondsTolerance)
     , m_releaseUnusedTexturesTimerInterval(s_releaseUnusedTexturesTimerInterval)
 {
-#if USE(GLIB)
+#if USE(GLIB_EVENT_LOOP)
     m_releaseUnusedTexturesTimer.setPriority(RunLoopSourcePriority::ReleaseUnusedResourcesTimer);
 #endif
 }

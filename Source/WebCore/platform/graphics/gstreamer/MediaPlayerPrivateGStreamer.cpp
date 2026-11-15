@@ -32,7 +32,6 @@
 
 #include "AudioTrackPrivateGStreamer.h"
 #include "GStreamerAudioMixer.h"
-#include "GStreamerCaptureDeviceManager.h"
 #include "GStreamerCommon.h"
 #include "GStreamerQuirks.h"
 #include "GStreamerRegistryScanner.h"
@@ -59,6 +58,7 @@
 #include "WebKitWebSourceGStreamer.h"
 
 #if ENABLE(MEDIA_STREAM)
+#include "GStreamerCaptureDeviceManager.h"
 #include "GStreamerMediaStreamSource.h"
 #include "MediaStreamPrivate.h"
 #endif
@@ -195,7 +195,7 @@ MediaPlayerPrivateGStreamer::MediaPlayerPrivateGStreamer(MediaPlayer& player)
     }
 #endif
 
-#if USE(GLIB)
+#if USE(GLIB_EVENT_LOOP)
     m_eosTimerHandler.setPriority(G_PRIORITY_DEFAULT_IDLE);
 #endif
     m_isPlayerShuttingDown.store(false);
@@ -2948,11 +2948,17 @@ void MediaPlayerPrivateGStreamer::configureDownloadBuffer(GstElement* element)
     auto mediaDiskCachePath = GMallocString::unsafeAdoptFromUTF8(g_strdup(std::getenv("WPE_SHELL_MEDIA_DISK_CACHE_PATH")));
     if (mediaDiskCachePath.isEmpty())
         mediaDiskCachePath = gBuildFilename(G_DIR_SEPARATOR_S, "var", "tmp");
+#elif OS(WINDOWS)
+    auto mediaDiskCachePath = GMallocString::unsafeAdoptFromUTF8(g_strdup(g_get_tmp_dir()));
 #else
     auto mediaDiskCachePath = gBuildFilename(G_DIR_SEPARATOR_S, "var", "tmp");
 #endif
 
+#if OS(WINDOWS)
+    auto newDownloadTemplate = gBuildFilename(mediaDiskCachePath, "WebKit-Media-XXXXXX");
+#else
     auto newDownloadTemplate = gBuildFilename(G_DIR_SEPARATOR_S, mediaDiskCachePath, "WebKit-Media-XXXXXX");
+#endif
     g_object_set(element, "temp-template", newDownloadTemplate.utf8(), nullptr);
     GST_DEBUG_OBJECT(pipeline(), "Reconfigured file download template from '%s' to '%s'", oldDownloadTemplate.get(), newDownloadTemplate.utf8());
 
@@ -3910,8 +3916,13 @@ void MediaPlayerPrivateGStreamer::eosTimerFired()
 
 void MediaPlayerPrivateGStreamer::acceleratedRenderingStateChanged()
 {
+#if OS(WINDOWS)
+    // This port paints decoded system-memory frames through GraphicsContext.
+    m_canRenderingBeAccelerated = false;
+#else
     RefPtr player = m_player.get();
     m_canRenderingBeAccelerated = player && player->acceleratedCompositingEnabled();
+#endif
 }
 
 bool MediaPlayerPrivateGStreamer::performTaskAtTime(Function<void(const MediaTime&)>&& task, const MediaTime& time)
@@ -4204,15 +4215,19 @@ void MediaPlayerPrivateGStreamer::triggerRepaint(GRefPtr<GstSample>&& sample)
     }
 
     bool shouldTriggerResize;
+#if USE(COORDINATED_GRAPHICS)
     IsDuplicateSample isDuplicateSample = IsDuplicateSample::No;
+#endif
     {
         Locker sampleLocker { m_sampleMutex };
         shouldTriggerResize = !m_sample;
+#if USE(COORDINATED_GRAPHICS)
         if (!shouldTriggerResize) {
             auto previousBuffer = gst_sample_get_buffer(m_sample.get());
             // We're omitting a !previousBuffer assert here because on some embedded platforms the buffer can't be deep copied by flushCurrentBuffer().
             isDuplicateSample = buffer == previousBuffer ? IsDuplicateSample::Yes : IsDuplicateSample::No;
         }
+#endif
         // m_videoInfo must describe the video information about m_sample, so update both in tandem.
         auto* caps = gst_sample_get_caps(sample.get());
         if (caps && (!m_videoInfo || !m_sample || caps != gst_sample_get_caps(m_sample.get())))
@@ -4262,7 +4277,12 @@ void MediaPlayerPrivateGStreamer::triggerRepaint(GRefPtr<GstSample>&& sample)
         if (m_isBeingDestroyed)
             return;
         m_drawTimer.startOneShot(0_s);
+#if !OS(WINDOWS)
         m_drawCondition.wait(m_drawLock);
+#else
+        // Let the Windows timer coalesce repaints without blocking the sink
+        // during a synchronous pause or seek on the main thread.
+#endif
         return;
     }
 
@@ -4283,7 +4303,14 @@ void MediaPlayerPrivateGStreamer::cancelRepaint(bool destroying)
     // m_drawCondition and to ensure that new triggerRepaint calls won't wait on m_drawCondition.
     if (m_isUsingFallbackVideoSink) {
         Locker locker { m_drawLock };
+#if OS(WINDOWS)
+        // Sink cancellation may run on a GStreamer thread. Windows timers must
+        // be stopped on their owning run loop; a pending repaint can finish.
+        if (isMainThread())
+            m_drawTimer.stop();
+#else
         m_drawTimer.stop();
+#endif
         m_isBeingDestroyed = destroying;
         m_drawCondition.notifyOne();
     }
@@ -4398,6 +4425,7 @@ void MediaPlayerPrivateGStreamer::setPresentationSize(const IntSize& size)
 
 void MediaPlayerPrivateGStreamer::paint(GraphicsContext& context, const FloatRect& rect)
 {
+    GST_DEBUG_OBJECT(pipeline(), "Painting video: disabled=%d visible=%d suspended=%d", context.paintingDisabled(), m_pageIsVisible, isSuspended());
     if (context.paintingDisabled())
         return;
 

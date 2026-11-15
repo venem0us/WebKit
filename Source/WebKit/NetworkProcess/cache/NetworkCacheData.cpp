@@ -41,7 +41,7 @@
 namespace WebKit {
 namespace NetworkCache {
 
-#if !USE(GLIB) && USE(CURL)
+#if USE(CURL)
 Data::Data(Vector<uint8_t>&& data)
     : Data(Variant<Vector<uint8_t>, FileSystem::MappedFileData> { WTF::move(data) })
 {

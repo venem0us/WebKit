@@ -49,7 +49,7 @@ OBJC_CLASS NSString;
 typedef RetainPtr<NSDictionary> TargetListing;
 #endif
 
-#if USE(GLIB)
+#if (USE(GLIB) && !OS(WINDOWS))
 #include <wtf/glib/GRefPtr.h>
 #include <wtf/glib/SocketConnection.h>
 typedef GRefPtr<GVariant> TargetListing;
@@ -90,7 +90,7 @@ public:
 
         struct SessionCapabilities {
             bool acceptInsecureCertificates { false };
-#if USE(GLIB) || USE(INSPECTOR_SOCKET_SERVER)
+#if (USE(GLIB) && !OS(WINDOWS)) || USE(INSPECTOR_SOCKET_SERVER)
             Vector<std::pair<String, String>> certificates;
             struct Proxy {
                 String type;
@@ -119,7 +119,7 @@ public:
         virtual String browserVersion() const { return { }; }
         virtual void requestAutomationSession(const String& sessionIdentifier, const SessionCapabilities&) = 0;
         virtual void requestedDebuggablesToWakeUp() { };
-#if USE(INSPECTOR_SOCKET_SERVER) || USE(GLIB)
+#if USE(INSPECTOR_SOCKET_SERVER) || (USE(GLIB) && !OS(WINDOWS))
         virtual void closeAutomationSession() = 0;
 #endif
     };
@@ -127,7 +127,7 @@ public:
 #if PLATFORM(COCOA)
     NODELETE JS_EXPORT_PRIVATE static void setNeedMachSandboxExtension(bool needExtension);
 #endif
-#if USE(GLIB)
+#if (USE(GLIB) && !OS(WINDOWS))
     JS_EXPORT_PRIVATE static void setInspectorServerAddress(UTF8CString&&);
     JS_EXPORT_PRIVATE static const UTF8CString& inspectorServerAddress();
 #endif
@@ -172,11 +172,11 @@ public:
 
     void updateTargetListing(TargetID);
 
-#if USE(GLIB)
+#if (USE(GLIB) && !OS(WINDOWS))
     void requestAutomationSession(const char* sessionID, const Client::SessionCapabilities&);
     void automationConnectionDidClose();
 #endif
-#if USE(GLIB) || USE(INSPECTOR_SOCKET_SERVER)
+#if (USE(GLIB) && !OS(WINDOWS)) || USE(INSPECTOR_SOCKET_SERVER)
     void setup(TargetID);
     void sendMessageToTarget(TargetID, const char* message);
 #endif
@@ -203,7 +203,7 @@ private:
     void setupXPCConnectionIfNeeded();
     void updateFromGlobalNotifyState() WTF_REQUIRES_LOCK(m_mutex);
 #endif
-#if USE(GLIB)
+#if (USE(GLIB) && !OS(WINDOWS))
     void setupConnection(Ref<SocketConnection>&&);
     static const SocketConnection::MessageHandlers& messageHandlers();
 
@@ -268,7 +268,7 @@ private:
 #if PLATFORM(COCOA)
     static std::atomic<bool> needMachSandboxExtension;
 #endif
-#if USE(GLIB)
+#if (USE(GLIB) && !OS(WINDOWS))
     static UTF8CString s_inspectorServerAddress;
 #endif
 
@@ -288,7 +288,7 @@ private:
 
     bool m_pendingMainThreadInitialization WTF_GUARDED_BY_LOCK(m_mutex) { false };
 #endif
-#if USE(GLIB)
+#if (USE(GLIB) && !OS(WINDOWS))
     RefPtr<SocketConnection> m_socketConnection;
     GRefPtr<GCancellable> m_cancellable;
 #endif

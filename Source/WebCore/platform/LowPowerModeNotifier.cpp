@@ -31,7 +31,7 @@ namespace WebCore {
 
 WTF_MAKE_TZONE_ALLOCATED_IMPL(LowPowerModeNotifier);
 
-#if !HAVE(APPLE_LOW_POWER_MODE_SUPPORT) && !USE(GLIB)
+#if !HAVE(APPLE_LOW_POWER_MODE_SUPPORT) && (!USE(GLIB) || OS(WINDOWS))
 
 LowPowerModeNotifier::LowPowerModeNotifier(LowPowerModeChangeCallback&&)
 {

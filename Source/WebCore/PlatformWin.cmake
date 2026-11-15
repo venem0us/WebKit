@@ -247,3 +247,15 @@ endif ()
 if (USE_SKIA)
     list(APPEND WebCore_PRIVATE_LIBRARIES ${SHARPYUV_LIBS})
 endif ()
+
+if (USE_GSTREAMER)
+    include(platform/GStreamer.cmake)
+    # The SDK also bundles OpenSSL headers; prefer the WebKit dependency ABI.
+    list(PREPEND WebCore_SYSTEM_INCLUDE_DIRECTORIES "${OPENSSL_INCLUDE_DIR}")
+    list(APPEND WebCore_PRIVATE_INCLUDE_DIRECTORIES "${WEBCORE_DIR}/platform/glib")
+    list(APPEND WebCore_SOURCES
+        platform/glib/ApplicationGLib.cpp
+        platform/glib/SharedBufferGlib.cpp
+    )
+    list(APPEND WebCore_LIBRARIES dwrite)
+endif ()

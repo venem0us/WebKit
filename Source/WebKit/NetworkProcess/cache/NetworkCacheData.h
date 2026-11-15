@@ -39,7 +39,7 @@
 #include <wtf/darwin/DispatchOSObject.h>
 #endif
 
-#if USE(GLIB)
+#if USE(GLIB) && !USE(CURL)
 #include <wtf/glib/GRefPtr.h>
 #endif
 
@@ -70,7 +70,7 @@ public:
     enum class Backing { Buffer, Map };
     Data(OSObjectPtr<dispatch_data_t>&&, Backing = Backing::Buffer);
 #endif
-#if USE(GLIB)
+#if USE(GLIB) && !USE(CURL)
     Data(GRefPtr<GBytes>&&, FileSystem::FileHandle&& = { });
 #elif USE(CURL)
     Data(Variant<Vector<uint8_t>, FileSystem::MappedFileData>&&);
@@ -94,7 +94,7 @@ public:
     Data copyData() const;
 #endif
 
-#if USE(GLIB)
+#if USE(GLIB) && !USE(CURL)
     GBytes* bytes() const { return m_buffer.get(); }
 #endif
 private:
@@ -102,7 +102,7 @@ private:
     mutable OSObjectPtr<dispatch_data_t> m_dispatchData;
     mutable std::span<const uint8_t> m_data;
 #endif
-#if USE(GLIB)
+#if USE(GLIB) && !USE(CURL)
     mutable GRefPtr<GBytes> m_buffer;
     Box<FileSystem::FileHandle> m_fileHandle;
 #endif

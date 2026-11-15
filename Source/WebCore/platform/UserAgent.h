@@ -46,7 +46,7 @@ WEBCORE_EXPORT String standardUserAgentWithApplicationName(const String& applica
 
 WEBCORE_EXPORT ASCIILiteral osNameForUserAgent();
 WEBCORE_EXPORT String systemMarketingVersionForUserAgentString();
-#elif USE(GLIB)
+#elif USE(GLIB) && !OS(WINDOWS)
 WEBCORE_EXPORT String standardUserAgent(const String& applicationName = emptyString(), const String& applicationVersion = emptyString(), UserAgentType = UserAgentType::Default);
 WEBCORE_EXPORT String standardUserAgentForURL(const URL&, UserAgentType = UserAgentType::Default);
 #else

@@ -26,9 +26,16 @@
 #if USE(GLIB)
 
 #include <algorithm>
+#include <wtf/Compiler.h>
+WTF_IGNORE_WARNINGS_IN_THIRD_PARTY_CODE_BEGIN
 #include <glib-object.h>
+#if OS(WINDOWS)
+#include <gio/gio.h>
+#endif
+WTF_IGNORE_WARNINGS_IN_THIRD_PARTY_CODE_END
 #include <wtf/HashTraits.h>
 
+#if !OS(WINDOWS)
 extern "C" {
     typedef struct _GDBusConnection GDBusConnection;
     typedef struct _GDBusNodeInfo GDBusNodeInfo;
@@ -46,6 +53,7 @@ extern "C" {
     gpointer g_object_ref_sink(gpointer);
 #endif
 };
+#endif
 
 namespace WTF {
 

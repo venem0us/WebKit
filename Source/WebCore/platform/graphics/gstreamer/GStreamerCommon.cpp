@@ -38,7 +38,10 @@
 #include "SharedBuffer.h"
 #include "VideoSinkGStreamer.h"
 #include "WebKitAudioSinkGStreamer.h"
+#if !OS(WINDOWS)
 #include <fnmatch.h>
+#endif
+#include <wtf/RunLoop.h>
 #include <mutex>
 #include <wtf/FileSystem.h>
 #include <wtf/HashMap.h>
@@ -461,8 +464,29 @@ bool ensureGStreamerInitializedNonWebProcess()
     return isGStreamerInitialized;
 }
 
+#if OS(WINDOWS)
+// Experimental bridge: dispatch the default GLib context on WebKit's main
+// thread, retaining the Windows message pump used by the Win port.
+static void startWindowsGStreamerContextPump()
+{
+    if (!isMainThread()) {
+        RunLoop::mainSingleton().dispatch([] { startWindowsGStreamerContextPump(); });
+        return;
+    }
+    static NeverDestroyed<RunLoop::Timer> timer { RunLoop::mainSingleton(), "GStreamer::WindowsContextPump"_s, [] {
+        for (unsigned count = 0; count < 128 && g_main_context_pending(nullptr); ++count)
+            g_main_context_iteration(nullptr, false);
+    } };
+    if (!timer->isActive())
+        timer->startRepeating(10_ms);
+}
+#endif
+
 bool ensureGStreamerInitialized()
 {
+#if OS(WINDOWS)
+    startWindowsGStreamerContextPump();
+#endif
     // WARNING: Please note this function can be called from any thread, for instance when creating
     // a WebCodec element from a JS Worker.
     RELEASE_ASSERT(isInWebProcess());
@@ -2009,7 +2033,11 @@ bool gstElementMatchesFactoryAndHasProperty(GstElement* element, ASCIILiteral fa
         return gstObjectHasProperty(element, propertyName);
 
     auto nameView = UTF8CStringView::unsafeFromUTF8(GST_OBJECT_NAME(factory));
+    #if OS(WINDOWS)
+    if (!g_pattern_match_simple(factoryNamePattern.characters(), nameView.utf8()))
+#else
     if (fnmatch(factoryNamePattern.characters(), nameView.utf8(), 0))
+#endif
         return false;
 
     return gstObjectHasProperty(element, propertyName);

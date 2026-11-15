@@ -24,6 +24,7 @@
 #include <wtf/glib/GRefPtr.h>
 #include <wtf/glib/GUniquePtr.h>
 
+#if !OS(WINDOWS)
 extern "C" {
 void* g_malloc(size_t);
 void* g_malloc0(size_t);
@@ -33,6 +34,7 @@ void* g_try_malloc0(size_t);
 void* g_try_realloc(void*, size_t);
 void g_strfreev(char**);
 }
+#endif
 
 namespace WTF {
 

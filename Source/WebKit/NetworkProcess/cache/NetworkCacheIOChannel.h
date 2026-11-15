@@ -31,7 +31,7 @@
 #include <wtf/WorkQueue.h>
 #include <wtf/text/WTFString.h>
 
-#if USE(GLIB)
+#if USE(GLIB) && !USE(CURL)
 #include <wtf/glib/GRefPtr.h>
 
 typedef struct _GInputStream GInputStream;
@@ -60,7 +60,7 @@ private:
     std::atomic<bool> m_wasDeleted { false }; // Try to narrow down a crash, https://bugs.webkit.org/show_bug.cgi?id=165659
 #if PLATFORM(COCOA)
     OSObjectPtr<dispatch_io_t> m_dispatchIO;
-#elif USE(GLIB)
+#elif USE(GLIB) && !USE(CURL)
     GRefPtr<GInputStream> m_inputStream WTF_GUARDED_BY_LOCK(m_lock);
     GRefPtr<GOutputStream> m_outputStream WTF_GUARDED_BY_LOCK(m_lock);
     WorkQueue::QOS m_qos WTF_GUARDED_BY_LOCK(m_lock);

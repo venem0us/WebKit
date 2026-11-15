@@ -127,7 +127,7 @@
 #include <WebCore/ImageAnalysisQueue.h>
 #endif
 
-#if USE(GLIB)
+#if USE(GLIB) && !OS(WINDOWS)
 #include "WebKitWebView.h"
 #include <wtf/glib/GWeakPtr.h>
 #endif
@@ -378,7 +378,7 @@ public:
     Markable<WebCore::FrameIdentifier> interactionFrameID;
 #endif
 
-#if USE(GLIB)
+#if USE(GLIB) && !OS(WINDOWS)
     GWeakPtr<WebKitWebView> platformView;
 #endif
 

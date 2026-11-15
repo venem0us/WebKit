@@ -42,3 +42,16 @@ list(APPEND WTF_LIBRARIES
     synchronization
     winmm
 )
+
+if (USE_GSTREAMER)
+    list(APPEND WTF_SOURCES
+        glib/Application.cpp
+        glib/GMallocString.cpp
+        glib/GRefPtr.cpp
+        glib/GSpanExtras.cpp
+        glib/URLGLib.cpp
+    )
+    file(GLOB gst_glib_headers RELATIVE "${CMAKE_CURRENT_LIST_DIR}" "${CMAKE_CURRENT_LIST_DIR}/glib/*.h")
+    list(APPEND WTF_PUBLIC_HEADERS ${gst_glib_headers})
+    list(APPEND WTF_LIBRARIES GLib::Gio GLib::Object GLib::Module GLib::Thread)
+endif ()

@@ -30,7 +30,7 @@
 
 namespace PAL {
 
-#if !PLATFORM(COCOA) && !USE(GLIB)
+#if !PLATFORM(COCOA) && (!USE(GLIB) || OS(WINDOWS))
 std::unique_ptr<SleepDisabler> SleepDisabler::create(const String& reason, Type type)
 {
     return std::unique_ptr<SleepDisabler>(new SleepDisabler(reason, type));

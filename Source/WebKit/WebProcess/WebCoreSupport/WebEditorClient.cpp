@@ -425,7 +425,7 @@ WebCore::DOMPasteAccessResponse WebEditorClient::requestDOMPasteAccess(WebCore::
     return page ? page->requestDOMPasteAccess(pasteAccessCategory, frameID, originIdentifier) : WebCore::DOMPasteAccessResponse::DeniedForGesture;
 }
 
-#if !PLATFORM(COCOA) && !USE(GLIB)
+#if !PLATFORM(COCOA) && (!USE(GLIB) || OS(WINDOWS))
 
 void WebEditorClient::handleKeyboardEvent(KeyboardEvent& event)
 {

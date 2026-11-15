@@ -258,7 +258,7 @@ void AppendPipeline::configureOptionalDemuxerFromAnyThread()
 AppendPipeline::AppendPipeline(SourceBufferPrivateGStreamer& sourceBufferPrivate, MediaPlayerPrivateGStreamerMSE& playerPrivate)
     : m_sourceBufferPrivate(sourceBufferPrivate)
     , m_playerPrivate(&playerPrivate)
-    , m_wasBusAlreadyNotifiedOfAvailableSamples(false)
+    , m_wasBusAlreadyNotifiedOfAvailableSamples()
 {
     ASSERT(isMainThread());
     std::call_once(s_staticInitializationFlag, AppendPipeline::staticInitialization);

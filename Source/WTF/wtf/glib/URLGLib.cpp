@@ -57,10 +57,12 @@ GRefPtr<GUri> URL::createGUri() const
         nullptr));
 }
 
+#if USE(SOUP)
 bool URL::hostIsIPAddress(StringView host)
 {
     return !host.isEmpty() && g_hostname_is_ip_address(host.utf8().legacyCStringPointer());
 }
+#endif
 
 } // namespace WTF
 

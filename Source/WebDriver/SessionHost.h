@@ -31,7 +31,7 @@
 #include <wtf/Observer.h>
 #include <wtf/text/WTFString.h>
 
-#if USE(GLIB)
+#if (USE(GLIB) && !OS(WINDOWS))
 #include <wtf/glib/GRefPtr.h>
 #include <wtf/glib/SocketConnection.h>
 typedef struct _GSubprocess GSubprocess;
@@ -127,7 +127,7 @@ private:
     void dispatchBidiMessage(RefPtr<JSON::Object>&&);
 #endif
 
-#if USE(GLIB)
+#if (USE(GLIB) && !OS(WINDOWS))
 
     enum class DisconnectReason {
         BrowserDidCloseConnection,
@@ -185,7 +185,7 @@ private:
     uint16_t m_targetPort { 0 };
     bool m_isRemoteBrowser { false };
 
-#if USE(GLIB)
+#if (USE(GLIB) && !OS(WINDOWS))
     Function<void (bool, std::optional<String>)> m_startSessionCompletionHandler;
     GRefPtr<GSubprocess> m_browser;
     RefPtr<SocketConnection> m_socketConnection;
