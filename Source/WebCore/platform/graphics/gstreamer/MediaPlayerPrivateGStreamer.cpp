@@ -4225,6 +4225,19 @@ bool MediaPlayerPrivateGStreamer::isSeamlessSeekingEnabled() const
         return false;
     }
 
+#if OS(WINDOWS)
+    // Nor does WebKitWebSrc, in practice. The demuxer turns the initial segment seek into a non-flushing byte seek, which
+    // the source carries out once it has the whole file from the network, while the last seconds of it are still in the
+    // source's queue, not yet pushed: they were dropped, and the next pass started with a segment based where the
+    // demuxer had got to. A 20 s looping video went back to the start 2-4 s early (15.7 or 17.6 s). Loop the plain way,
+    // at the real end of stream, with a seek back to the start.
+    // (Media Source Extensions players have their own source and seeking, and keep it.)
+    if (!isMediaSource() && (m_url.protocolIsInHTTPFamily() || m_url.protocolIsBlob())) {
+        GST_DEBUG_OBJECT(m_pipeline.get(), "Seamless seeking disabled for media streamed by WebKitWebSrc");
+        return false;
+    }
+#endif
+
     return player->isLooping() && m_isSegmentSeekAllowed;
 }
 
