@@ -165,7 +165,9 @@ public:
     {
         m_pageIsVisible = visible;
 #if OS(WINDOWS)
-        m_pageIsVisibleForSink = visible;
+        // Frames don't go to the compositor while the page is hidden; a paused video sends none afterwards either.
+        if (!m_pageIsVisibleForSink.exchange(visible) && visible)
+            pushCurrentFrameToCompositor();
 #endif
     }
     void setViewportVisibility(ViewportVisibility) final;
@@ -698,6 +700,7 @@ private:
     // With accelerated compositing, frames go from the sink thread straight to the compositor through this sink
     // (set by the video's compositing layer); a frame sent this way is presented without a main-thread repaint.
     bool pushFrameToCompositor(GstSample*);
+    void pushCurrentFrameToCompositor();
     Lock m_compositorFrameSinkLock;
     RefPtr<MediaPlayerCompositorFrameSink> m_compositorFrameSink WTF_GUARDED_BY_LOCK(m_compositorFrameSinkLock);
     std::atomic<bool> m_framesGoToCompositor { false }; // the last frame went through the sink: repaint() skips the element repaint

@@ -342,6 +342,7 @@ std::optional<UpdateInfo> WCScene::update(WCUpdateInfo&& update)
         m_layers.remove(id);
 #if OS(WINDOWS)
         m_pendingVideoFrames.remove(id);
+        m_pendingVideoTextures.remove(id);
         releaseVideoTexturesOfLayer(id);
 #endif
     }
@@ -365,6 +366,19 @@ std::optional<UpdateInfo> WCScene::update(WCUpdateInfo&& update)
     m_lastRootLayer = update.rootLayer;
     m_lastViewport = update.viewport;
     m_lastUpdateWasOnScreen = !update.remoteContextHostedIdentifier && !m_usesOffscreenRendering;
+    if (!m_pendingVideoTextures.isEmpty() && m_lastUpdateWasOnScreen) {
+        Vector<WebCore::PlatformLayerIdentifier> applied;
+        for (auto& [id, textureIdentifier] : m_pendingVideoTextures) {
+            auto* layer = m_layers.get(id);
+            if (!layer)
+                continue;
+            if (auto* texture = m_videoTextures.get(textureIdentifier))
+                showVideoTexture(*layer, textureIdentifier, *texture);
+            applied.append(id);
+        }
+        for (auto id : applied)
+            m_pendingVideoTextures.remove(id);
+    }
 #endif
 
     WebCore::BitmapTexture* surface = nullptr;
@@ -521,9 +535,28 @@ bool WCScene::updateVideoTexture(WebCore::PlatformLayerIdentifier layerIdentifie
     if (!layer || !m_lastUpdateWasOnScreen || !m_lastRootLayer || !m_context->makeContextCurrent()) {
         if (stats)
             ++stats->texturesNotShown;
+        // A paused video's frame can come before the rendering update that adds its new layer (a page's layers rebuilt on
+        // returning to its tab, full screen): handing it back left the layer empty, white, as a paused video sends no
+        // other. Keep the newest such frame per layer and show it once the layer is there (see update()).
+        if (!layer) {
+            auto previous = m_pendingVideoTextures.get(layerIdentifier);
+            if (previous && previous != textureIdentifier)
+                skipVideoTexture(previous);
+            m_pendingVideoTextures.set(layerIdentifier, textureIdentifier);
+            return false;
+        }
         skipVideoTexture(textureIdentifier);
         return false;
     }
+    if (!showVideoTexture(*layer, textureIdentifier, *texture))
+        return false;
+    return repaintForVideo();
+}
+
+bool WCScene::showVideoTexture(Layer& layer, uint64_t textureIdentifier, VideoTexture& videoTexture)
+{
+    auto* stats = GPURenderingStats::singletonIfEnabled();
+    auto* texture = &videoTexture;
     if (texture->mutex->AcquireSync(1, 50) != S_OK) {
         if (stats)
             ++stats->textureAcquireTimeouts;
@@ -533,19 +566,19 @@ bool WCScene::updateVideoTexture(WebCore::PlatformLayerIdentifier layerIdentifie
         ++stats->texturesShown;
     texture->held = true;
     // Give back the texture shown until now: the web process can write into it again.
-    if (layer->shownTexture && layer->shownTexture != textureIdentifier) {
-        if (auto* previous = m_videoTextures.get(layer->shownTexture); previous && previous->held) {
+    if (layer.shownTexture && layer.shownTexture != textureIdentifier) {
+        if (auto* previous = m_videoTextures.get(layer.shownTexture); previous && previous->held) {
             previous->mutex->ReleaseSync(0);
             previous->held = false;
         }
     }
-    layer->shownTexture = textureIdentifier;
-    layer->videoFrame = nullptr;
-    if (!layer->videoTextureLayer)
-        layer->videoTextureLayer = makeUnique<WCVideoTextureLayer>();
-    layer->videoTextureLayer->setTexture(texture->glTexture);
-    layer->texmapLayer.setContentsLayer(layer->videoTextureLayer.get());
-    return repaintForVideo();
+    layer.shownTexture = textureIdentifier;
+    layer.videoFrame = nullptr;
+    if (!layer.videoTextureLayer)
+        layer.videoTextureLayer = makeUnique<WCVideoTextureLayer>();
+    layer.videoTextureLayer->setTexture(texture->glTexture);
+    layer.texmapLayer.setContentsLayer(layer.videoTextureLayer.get());
+    return true;
 }
 
 void WCScene::skipVideoTexture(uint64_t textureIdentifier)
@@ -561,6 +594,7 @@ void WCScene::skipVideoTexture(uint64_t textureIdentifier)
 
 void WCScene::releaseVideoTexturesOfLayer(WebCore::PlatformLayerIdentifier layerIdentifier)
 {
+    m_pendingVideoTextures.remove(layerIdentifier);
     if (m_videoTextures.isEmpty() || !m_context->makeContextCurrent())
         return;
     m_videoTextures.removeIf([&](auto& entry) {

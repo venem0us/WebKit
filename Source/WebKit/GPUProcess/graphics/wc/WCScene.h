@@ -88,6 +88,9 @@ private:
     HashMap<WebCore::PlatformLayerIdentifier, RefPtr<WebCore::ShareableBitmap>> m_pendingVideoFrames;
     struct VideoTexture;
     HashMap<uint64_t, std::unique_ptr<VideoTexture>> m_videoTextures;
+    // Like m_pendingVideoFrames, for frames left on the GPU: the newest texture for each layer the scene doesn't have yet.
+    HashMap<WebCore::PlatformLayerIdentifier, uint64_t> m_pendingVideoTextures;
+    bool showVideoTexture(Layer&, uint64_t texture, VideoTexture&);
     bool repaintForVideo();
     void releaseVideoTexturesOfLayer(WebCore::PlatformLayerIdentifier);
 #endif
