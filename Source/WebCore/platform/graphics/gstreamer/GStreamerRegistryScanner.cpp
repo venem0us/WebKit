@@ -973,8 +973,16 @@ MediaPlayerEnums::SupportsType GStreamerRegistryScanner::isContentTypeSupported(
     // (point 16.3.1 from https://developers.google.com/youtube/devices/living-room/files/pdf-guides/YouTube_TV_HTML5_Technical_Requirements_2018.pdf).
     const auto eotf = contentType.parameter("eotf"_s);
     if (!eotf.isEmpty()) {
+#if OS(WINDOWS)
+        // Video reaches the screen as 8-bit RGB here (the sink takes BGRx/BGRA): there's no HDR output path. Saying
+        // PQ/HLG are supported makes sites send 10-bit HDR streams (YouTube's "2160p60" for HDR uploads), which
+        // play washed out at best, and with the Direct3D 12 decoders can deadlock on a stream switch.
+        if (eotf != "bt709"_s)
+            return SupportsType::IsNotSupported;
+#else
         if (eotf != "bt709"_s && eotf != "smpte2084"_s && eotf != "arib-std-b67"_s)
             return SupportsType::IsNotSupported;
+#endif
     }
     return SupportsType::IsSupported;
 }
@@ -1140,6 +1148,15 @@ GStreamerRegistryScanner::RegistryLookupResult GStreamerRegistryScanner::isConfi
                 if (tf == PlatformMediaCapabilitiesTransferFunction::PQ || tf == PlatformMediaCapabilitiesTransferFunction::HLG)
                     return { false, false, nullptr };
             }
+        }
+#elif OS(WINDOWS)
+        // No HDR output path on Windows (see the 'eotf' check in isContentTypeSupported).
+        if (videoConfiguration.hdrMetadataType.has_value())
+            return { false, false, nullptr };
+        if (videoConfiguration.transferFunction.has_value()) {
+            auto tf = videoConfiguration.transferFunction.value();
+            if (tf == PlatformMediaCapabilitiesTransferFunction::PQ || tf == PlatformMediaCapabilitiesTransferFunction::HLG)
+                return { false, false, nullptr };
         }
 #endif
 
