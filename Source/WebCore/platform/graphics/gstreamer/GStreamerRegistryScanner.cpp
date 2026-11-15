@@ -27,7 +27,9 @@
 #include "GStreamerCommon.h"
 #include "PlatformScreen.h"
 #include "ScreenProperties.h"
+#if !OS(WINDOWS)
 #include <fnmatch.h>
+#endif
 #include <gst/pbutils/codec-utils.h>
 #include <wtf/NeverDestroyed.h>
 #include <wtf/PrintStream.h>
@@ -41,6 +43,14 @@
 #endif
 
 namespace WebCore {
+
+#if OS(WINDOWS)
+// Codec and container patterns use '*' and '?' wildcards.
+static int fnmatch(const char* pattern, const char* value, int)
+{
+    return g_pattern_match_simple(pattern, value) ? 0 : 1;
+}
+#endif
 
 GST_DEBUG_CATEGORY_STATIC(webkit_media_gst_registry_scanner_debug);
 #define GST_CAT_DEFAULT webkit_media_gst_registry_scanner_debug

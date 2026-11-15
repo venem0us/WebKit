@@ -46,7 +46,7 @@
 #if OS(ANDROID)
 #include "ArgumentCodersAndroid.h"
 #endif
-#if USE(GLIB)
+#if USE(GLIB) && !OS(WINDOWS)
 #include "RendererBufferFormat.h"
 #endif
 #if USE(UNIX_DOMAIN_SOCKETS)

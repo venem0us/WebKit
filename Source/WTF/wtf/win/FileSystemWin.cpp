@@ -49,6 +49,25 @@ namespace WTF {
 
 namespace FileSystemImpl {
 
+#if USE(GLIB)
+UTF8CString currentExecutablePath()
+{
+    WCHAR buffer[32768];
+    auto length = GetModuleFileNameW(nullptr, buffer, std::size(buffer));
+    if (!length || length >= std::size(buffer))
+        return { };
+    return String(buffer, length).utf8();
+}
+
+UTF8CString currentExecutableName()
+{
+    auto path = currentExecutablePath();
+    if (path.isNull())
+        return { };
+    return pathFileName(String::fromUTF8(path.span())).utf8();
+}
+#endif
+
 static const ULONGLONG kSecondsFromFileTimeToTimet = 11644473600;
 
 static bool getFindData(String path, WIN32_FIND_DATAW& findData)

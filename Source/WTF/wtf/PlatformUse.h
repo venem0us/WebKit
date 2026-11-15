@@ -70,7 +70,7 @@
 #define USE_GLIB 1
 #endif
 
-#if OS(DARWIN) || USE(GLIB)
+#if OS(DARWIN) || (USE(GLIB) && !OS(WINDOWS))
 #define USE_TIME_ZONE_CHANGE_NOTIFICATIONS 1
 #endif
 
@@ -215,7 +215,7 @@
 #endif
 
 #if WTF_DEFAULT_EVENT_LOOP
-#if USE(GLIB)
+#if USE(GLIB) && !OS(WINDOWS)
 /* Use GLib's event loop abstraction. Primarily GTK port uses it. */
 #define USE_GLIB_EVENT_LOOP 1
 #elif OS(WINDOWS)

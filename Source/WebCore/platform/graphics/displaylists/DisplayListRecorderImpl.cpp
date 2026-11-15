@@ -374,10 +374,19 @@ void RecorderImpl::fillEllipse(const FloatRect& rect)
 }
 
 #if ENABLE(VIDEO)
-void RecorderImpl::drawVideoFrame(const VideoFrame&, const FloatRect&, ShouldDiscardAlpha, ImagePaintingOptions)
+void RecorderImpl::drawVideoFrame(const VideoFrame& frame, const FloatRect& destination, ShouldDiscardAlpha shouldDiscardAlpha, ImagePaintingOptions options)
 {
+#if USE(GSTREAMER) && OS(WINDOWS)
+    // Snapshot the decoded frame and record it through drawNativeImage().
+    GraphicsContext::drawVideoFrame(frame, destination, shouldDiscardAlpha, options);
+#else
+    UNUSED_PARAM(frame);
+    UNUSED_PARAM(destination);
+    UNUSED_PARAM(shouldDiscardAlpha);
+    UNUSED_PARAM(options);
     appendStateChangeItemIfNecessary();
     // FIXME: TODO
+#endif
 }
 #endif // ENABLE(VIDEO)
 

@@ -39,7 +39,7 @@
 #if USE(CF)
 using PlatformRunLoopObserver = struct __CFRunLoopObserver*;
 using PlatformRunLoop = struct __CFRunLoop*;
-#elif USE(GLIB)
+#elif USE(GLIB_EVENT_LOOP)
 using PlatformRunLoopObserver = ActivityObserver;
 using PlatformRunLoop = RefPtr<RunLoop>;
 #else
@@ -72,7 +72,7 @@ public:
     RunLoopObserver(WellKnownOrder order, RunLoopObserverCallback&& callback, Type type = Type::Repeating)
         : m_callback(WTF::move(callback))
         , m_type(type)
-#if USE(CF) || USE(GLIB)
+#if USE(CF) || USE(GLIB_EVENT_LOOP)
         , m_order(order)
     { }
 #else

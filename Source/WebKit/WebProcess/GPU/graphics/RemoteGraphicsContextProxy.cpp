@@ -597,6 +597,9 @@ void RemoteGraphicsContextProxy::drawVideoFrame(const VideoFrame& frame, const F
     if (!sharedVideoFrame)
         return;
     send(Messages::RemoteGraphicsContext::DrawVideoFrame(WTF::move(*sharedVideoFrame), destination, shouldDiscardAlpha, options));
+#elif USE(GSTREAMER) && OS(WINDOWS)
+    // Windows shares native images through the existing graphics resource cache.
+    GraphicsContext::drawVideoFrame(frame, destination, shouldDiscardAlpha, options);
 #endif
 }
 #endif

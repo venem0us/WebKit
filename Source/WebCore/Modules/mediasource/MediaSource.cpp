@@ -802,7 +802,7 @@ void MediaSource::removeSourceBufferWithOptionalDestruction(SourceBuffer& buffer
             bool removedEnabledAudioTrack = false;
 
             // 5.3 For each AudioTrack object in the SourceBuffer audioTracks list, run the following steps:
-            for (ssize_t index = audioTracks->length() - 1; index >= 0; index--) {
+            for (auto index = audioTracks->length(); index--;) {
                 Ref track = audioTracks->item(index);
 
                 if (withDestruction) {
@@ -857,7 +857,7 @@ void MediaSource::removeSourceBufferWithOptionalDestruction(SourceBuffer& buffer
             bool removedSelectedVideoTrack = false;
 
             // 7.3 For each VideoTrack object in the SourceBuffer videoTracks list, run the following steps:
-            for (ssize_t index = videoTracks->length() - 1; index >= 0; index--) {
+            for (auto index = videoTracks->length(); index--;) {
                 Ref track = videoTracks->item(index);
 
                 if (withDestruction) {
@@ -912,7 +912,7 @@ void MediaSource::removeSourceBufferWithOptionalDestruction(SourceBuffer& buffer
             bool removedEnabledTextTrack = false;
 
             // 9.3 For each TextTrack object in the SourceBuffer textTracks list, run the following steps:
-            for (ssize_t index = textTracks->length() - 1; index >= 0; index--) {
+            for (auto index = textTracks->length(); index--;) {
                 Ref track = *textTracks->item(index);
 
                 if (withDestruction) {

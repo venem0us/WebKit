@@ -86,7 +86,7 @@
 #endif
 #endif // OS(DARWIN)
 
-#if USE(GLIB)
+#if USE(GLIB) && !OS(WINDOWS)
 #include <wtf/glib/GSocketMonitor.h>
 #endif
 
@@ -408,7 +408,7 @@ public:
     pid_t remoteProcessID() const;
 #endif
 
-#if USE(GLIB)
+#if USE(GLIB) && !OS(WINDOWS)
     void sendCredentials() const;
     static pid_t remoteProcessID(GSocket*);
 #endif
@@ -841,7 +841,7 @@ private:
 
     Vector<uint8_t> m_readBuffer;
 
-#if USE(GLIB)
+#if USE(GLIB) && !OS(WINDOWS)
     std::unique_ptr<Decoder> createMessageDecoder();
 
     GRefPtr<GSocket> m_socket;

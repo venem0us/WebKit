@@ -184,7 +184,9 @@ GStreamerVideoFrameConverter::Pipeline& GStreamerVideoFrameConverter::ensurePipe
     if (!m_systemMemoryPipeline) {
         m_systemMemoryPipeline = makeUnique<Pipeline>(Pipeline::Type::SystemMemory);
         m_releaseUnusedSystemMemoryPipelineTimer = makeUnique<RunLoop::Timer>(RunLoop::currentSingleton(), "GStreamerVideoFrameConverter::ReleaseUnusedSystemMemoryPipelineTimer"_s, this, &GStreamerVideoFrameConverter::releaseUnusedSystemMemoryPipelineTimerFired);
+#if USE(GLIB_EVENT_LOOP)
         m_releaseUnusedSystemMemoryPipelineTimer->setPriority(RunLoopSourcePriority::ReleaseUnusedResourcesTimer);
+#endif
     }
     m_releaseUnusedSystemMemoryPipelineTimer->startOneShot(s_releaseUnusedPipelinesTimerInterval);
     return *m_systemMemoryPipeline;

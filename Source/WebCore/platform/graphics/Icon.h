@@ -67,7 +67,7 @@ public:
     static Ref<Icon> create(HICON hIcon) { return adoptRef(*new Icon(hIcon)); }
 #endif
 
-#if USE(GLIB)
+#if USE(GLIB) && !OS(WINDOWS)
     WEBCORE_EXPORT static RefPtr<Icon> create(GRefPtr<GIcon>&&);
 
     GIcon* icon() const { return m_icon.get(); };

@@ -107,7 +107,7 @@ public:
     // MediaSource readyState is "ended". Used by both MediaSource (main) on
     // readyState/dirty triggers and MediaSourcePrivate (dispatcher) when track
     // ranges change so a single algorithm produces the value.
-    WEBCORE_EXPORT static PlatformTimeRanges computeBufferedRanges(const Vector<PlatformTimeRanges>& activeRanges, bool ended);
+    static PlatformTimeRanges computeBufferedRanges(const Vector<PlatformTimeRanges>& activeRanges, bool ended);
 
     MediaPlayer::ReadyState NODELETE mediaPlayerReadyState() const;
     void setMediaPlayerReadyState(MediaPlayer::ReadyState);
