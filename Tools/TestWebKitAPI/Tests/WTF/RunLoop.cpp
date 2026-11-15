@@ -373,4 +373,82 @@ TEST(WTF_RunLoop, MAYBE_DispatchInRunLoopIterationDispatchesOnNextIteration2)
         runLoop.cycle();
 }
 
+#if OS(WINDOWS)
+// An embedding application's UI thread is pumped by the application's own message loop (e.g. WPF's), not by
+// RunLoop::run(). Timers must still fire there, as they did with WM_TIMER before the 2025 run loop rework.
+static void pumpForeignMessageLoopUntil(bool& done, Seconds timeout)
+{
+    auto deadline = MonotonicTime::now() + timeout;
+    MSG message;
+    while (!done && MonotonicTime::now() < deadline) {
+        if (::MsgWaitForMultipleObjectsEx(0, nullptr, 10, QS_ALLINPUT, MWMO_INPUTAVAILABLE) == WAIT_TIMEOUT)
+            continue;
+        while (!done && ::PeekMessage(&message, nullptr, 0, 0, PM_REMOVE)) {
+            ::TranslateMessage(&message);
+            ::DispatchMessage(&message);
+        }
+    }
+}
+
+TEST(WTF_RunLoop, TimerFiresUnderForeignMessageLoop)
+{
+    WTF::initializeMainThread();
+
+    bool done = false;
+    RunLoop::mainSingleton().dispatchAfter(50_ms, [&] {
+        done = true;
+    });
+    pumpForeignMessageLoopUntil(done, 2_s);
+    EXPECT_TRUE(done);
+}
+
+TEST(WTF_RunLoop, NestedDispatchAfterFiresUnderForeignMessageLoop)
+{
+    WTF::initializeMainThread();
+
+    // https://bugs.webkit.org/show_bug.cgi?id=291217
+    bool dispatched = false;
+    bool done = false;
+    RunLoop::mainSingleton().dispatch([&] {
+        dispatched = true;
+        RunLoop::mainSingleton().dispatchAfter(100_ms, [&] {
+            done = true;
+        });
+    });
+    pumpForeignMessageLoopUntil(done, 2_s);
+    EXPECT_TRUE(dispatched);
+    EXPECT_TRUE(done);
+}
+
+TEST(WTF_RunLoop, RepeatingTimerFiresUnderForeignMessageLoop)
+{
+    WTF::initializeMainThread();
+
+    unsigned fires = 0;
+    bool done = false;
+    RunLoop::Timer timer(RunLoop::mainSingleton(), "RepeatingTimerFiresUnderForeignMessageLoop"_s, [&] {
+        if (++fires == 10)
+            done = true;
+    });
+    timer.startRepeating(16_ms);
+    pumpForeignMessageLoopUntil(done, 2_s);
+    timer.stop();
+    EXPECT_EQ(fires, 10u);
+}
+
+TEST(WTF_RunLoop, TimerStartedCrossThreadFiresUnderForeignMessageLoop)
+{
+    WTF::initializeMainThread();
+
+    bool done = false;
+    Thread::create("TimerStartedCrossThread"_s, [&] {
+        RunLoop::mainSingleton().dispatchAfter(30_ms, [&] {
+            done = true;
+        });
+    })->waitForCompletion();
+    pumpForeignMessageLoopUntil(done, 2_s);
+    EXPECT_TRUE(done);
+}
+#endif // OS(WINDOWS)
+
 } // namespace TestWebKitAPI

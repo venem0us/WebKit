@@ -26,6 +26,10 @@
 #include "config.h"
 #include <wtf/RunLoop.h>
 
+#include <algorithm>
+#include <cmath>
+#include <optional>
+#include <wtf/Scope.h>
 #include <wtf/WindowsExtras.h>
 
 namespace WTF {
@@ -34,6 +38,21 @@ static const UINT PerformWorkMessage = WM_USER + 1;
 static const UINT SetTimerMessage = WM_USER + 2;
 static const UINT FireTimerMessage = WM_USER + 3;
 static const LPCWSTR kRunLoopMessageWindowClassName = L"RunLoopMessageWindow";
+
+// Timers fire from RunLoop::run(), which waits for the earliest deadline itself. A thread whose messages are pumped
+// by someone else (an application's own message loop, such as WPF's in an embedding UI process, or a modal dialog)
+// never enters run(), so the message window also keeps a Win32 timer armed for the earliest deadline: any message
+// pump delivers its WM_TIMER, which fires the due timers.
+static const UINT_PTR WakeTimerID = 1;
+
+// > 0 while this thread is inside RunLoop::run(); the wake timer is only needed outside it.
+static thread_local unsigned s_runDepth;
+
+static UINT wakeTimerDelay(Seconds delay)
+{
+    double milliseconds = std::ceil(delay.milliseconds());
+    return static_cast<UINT>(std::clamp<double>(milliseconds, USER_TIMER_MINIMUM, USER_TIMER_MAXIMUM));
+}
 
 LRESULT CALLBACK RunLoop::RunLoopWndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
@@ -53,11 +72,34 @@ LRESULT CALLBACK RunLoop::RunLoopWndProc(HWND hWnd, UINT message, WPARAM wParam,
 
 LRESULT RunLoop::wndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
+    // Points the wake timer at the earliest deadline (or stops it when no timer is pending).
+    auto armWakeTimer = [&] {
+        std::optional<Seconds> delay;
+        {
+            Locker locker { m_loopLock };
+            if (!m_timers.isEmpty())
+                delay = m_timers.last()->m_nextFireDate - MonotonicTime::now();
+        }
+        if (delay)
+            ::SetTimer(hWnd, WakeTimerID, wakeTimerDelay(*delay), nullptr);
+        else
+            ::KillTimer(hWnd, WakeTimerID);
+    };
+
     switch (message) {
     case PerformWorkMessage:
         performWork();
         return 0;
     case SetTimerMessage:
+        // The earliest timer changed. Inside run() the loop's own wait already covers it.
+        if (!s_runDepth)
+            armWakeTimer();
+        return 0;
+    case WM_TIMER:
+        if (wParam != WakeTimerID)
+            break;
+        fireTimers();
+        armWakeTimer();
         return 0;
     case FireTimerMessage:
         RunLoop::TimerBase* timer = nullptr;
@@ -77,6 +119,8 @@ LRESULT RunLoop::wndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 void RunLoop::run()
 {
     auto& runLoop = RunLoop::currentSingleton();
+    ++s_runDepth;
+    auto leaveRun = makeScopeExit([] { --s_runDepth; });
     while (true) {
         runLoop.fireTimers();
         MSG message;
@@ -253,6 +297,9 @@ void RunLoop::TimerBase::timerFired()
             m_runLoop->m_timers.appendAndBubble(this, [&] (TimerBase* otherTimer) -> bool {
                 return m_nextFireDate > otherTimer->m_nextFireDate;
             });
+            // Rescheduled as the earliest timer: move the wake timer, unless run() is waiting for it anyway.
+            if (!s_runDepth && m_runLoop->m_timers.last() == this)
+                ::PostMessage(m_runLoop->m_runLoopMessageWindow, SetTimerMessage, 0, 0);
         }
     }
 
