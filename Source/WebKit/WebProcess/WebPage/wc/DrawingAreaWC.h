@@ -102,6 +102,9 @@ private:
     WebCore::Timer m_updateRenderingTimer;
     bool m_isRenderingSuspended { false };
     bool m_hasDeferredRenderingUpdate { false };
+#if OS(WINDOWS)
+    bool m_deferredRenderingUpdateIsTick { false }; // the deferred update was a display tick's (see displayDidRefresh())
+#endif
     bool m_inUpdateRendering { false };
     bool m_waitDidUpdate { false };
     bool m_isForceRepaintCompletionHandlerDeferred { false };

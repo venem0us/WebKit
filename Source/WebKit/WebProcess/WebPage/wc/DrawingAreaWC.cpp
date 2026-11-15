@@ -207,11 +207,19 @@ void DrawingAreaWC::updateRenderingWithForcedRepaintAsync(WebPage&, CompletionHa
 
 void DrawingAreaWC::triggerRenderingUpdate()
 {
+#if OS(WINDOWS)
+    bool isTick = DisplayRefreshMonitor::isDeliveringDisplayTick();
+#endif
     if (m_isRenderingSuspended || m_waitDidUpdate) {
 #if OS(WINDOWS)
         if (m_renderingStats && m_waitDidUpdate)
             ++m_renderingStats->deferredTriggers;
         DisplayRefreshMonitor::traceRenderingEvent('Q');
+        // A tick that came while the GPU was still busy. Not a request made during the update itself (a rAF callback
+        // repainting): the tick's flag is still set then, but running that one right after the GPU's reply would
+        // double the update rate.
+        if (isTick && !m_inUpdateRendering)
+            m_deferredRenderingUpdateIsTick = true;
 #endif
         m_hasDeferredRenderingUpdate = true;
         return;
@@ -219,20 +227,31 @@ void DrawingAreaWC::triggerRenderingUpdate()
 #if OS(WINDOWS)
     // A display tick is delivered at the top of the run loop, so update right away. A zero-delay timer
     // waits behind the page's own timers and tasks, often long enough for the next video frame to arrive
-    // and replace the one this tick was for.
-    // Composited pages only: without compositing, every repaint triggers an update directly, and those
-    // land between ticks.
-    if (DisplayRefreshMonitor::isDeliveringDisplayTick() && !m_inUpdateRendering && isCompositingMode()) {
+    // and replace the one this tick was for. (RenderingUpdateScheduler marks the updates it fires, from the
+    // display clock or its timer, as ticks.)
+    if (isTick && !m_inUpdateRendering) {
         m_updateRenderingTimer.stop();
         updateRendering();
         return;
     }
+    // Anything else on a visible page (a repaint of a page that isn't composited, a scroll, a forced repaint)
+    // waits for the next tick. It used to start an update straight away, and every update runs the page's
+    // requestAnimationFrame callbacks: a callback that repaints (moving an element) asked for the next update itself,
+    // so the loop ran as fast as an update completes, about 650 callbacks a second on a 60 Hz display (60 only
+    // where timers fire late). An invisible page's scheduler triggers its update synchronously, from wherever the
+    // request was made, so those (and a tick that comes during an update) keep the zero-delay timer below.
+    static bool isSchedulingRenderingUpdate; // the scheduler can call back synchronously
+    if (!isTick && !isSchedulingRenderingUpdate) {
+        if (RefPtr page = m_webPage->corePage(); page && page->isVisible()) {
+            SetForScope scheduling(isSchedulingRenderingUpdate, true);
+            DisplayRefreshMonitor::traceRenderingEvent('Z');
+            page->scheduleRenderingUpdate(WebCore::RenderingUpdateStep::LayerFlush);
+            return;
+        }
+    }
 #endif
     if (m_updateRenderingTimer.isActive())
         return;
-#if OS(WINDOWS)
-    DisplayRefreshMonitor::traceRenderingEvent('Z');
-#endif
     m_updateRenderingTimer.startOneShot(0_s);
 }
 
@@ -570,8 +589,12 @@ void DrawingAreaWC::displayDidRefresh(MonotonicTime)
 #if OS(WINDOWS)
         // The GPU's reply is handled at the top of the run loop, like a display tick, so run the update
         // that was waiting for it right away instead of queuing it behind the page's timers and tasks.
-        // Composited pages only, for the same reason as in triggerRenderingUpdate().
-        if (!m_isRenderingSuspended && !m_inUpdateRendering && isCompositingMode()) {
+        // On a composited page, or when the update that waited was a display tick's: a frame that took longer than
+        // one tick then shows as soon as it can rather than a whole tick later (frames at 30 per second instead of
+        // nearly 60, which cut MotionMark's score by 15%). A page that isn't composited and asked for the update
+        // with a repaint waits for the next tick (see triggerRenderingUpdate()).
+        bool deferredUpdateWasTick = std::exchange(m_deferredRenderingUpdateIsTick, false);
+        if (!m_isRenderingSuspended && !m_inUpdateRendering && (isCompositingMode() || deferredUpdateWasTick)) {
             m_updateRenderingTimer.stop();
             updateRendering();
             return;

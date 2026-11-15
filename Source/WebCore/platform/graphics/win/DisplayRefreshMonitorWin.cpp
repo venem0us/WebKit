@@ -178,6 +178,13 @@ bool DisplayRefreshMonitor::isDeliveringDisplayTick()
 {
     return deliveringDisplayTick;
 }
+
+// For RenderingUpdateScheduler, which marks the updates it triggers as ticks (declared there: DisplayRefreshMonitor.h
+// is included too widely to change for this). Returns the previous value.
+bool setDeliveringDisplayTick(bool delivering)
+{
+    return std::exchange(deliveringDisplayTick, delivering);
+}
 // Arrival time of the newest frame whose repaint request has reached the main thread (main thread only).
 static std::atomic<double> lastRequestedVideoFrame;
 
