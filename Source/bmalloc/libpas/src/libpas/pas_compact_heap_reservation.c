@@ -36,6 +36,34 @@
 #include <memory-extra.h>
 #endif
 
+/* Glass: on Windows too, the reservation is only reserved, and its pages are committed as the two fronts reach them,
+   as on PlayStation. pas_page_malloc commits everything it allocates on Windows, and Windows charges committed memory
+   to the process whether it is touched or not: each WebKit process, and the browser, had all 128 MB of it committed
+   and almost none of it used (about 1.6 GB of commit across a dozen processes). */
+#if PAS_PLATFORM(PLAYSTATION) || PAS_OS(WINDOWS)
+#define PAS_COMPACT_HEAP_RESERVATION_COMMITS_LAZILY 1
+#else
+#define PAS_COMPACT_HEAP_RESERVATION_COMMITS_LAZILY 0
+#endif
+
+#if PAS_OS(WINDOWS)
+#include <windows.h>
+
+static void* memory_extra_vss_reserve(size_t size, size_t alignment)
+{
+    /* VirtualAlloc reservations start on the allocation granularity (64 KB), which is more than the page alignment. */
+    PAS_ASSERT(alignment <= 65536);
+    return VirtualAlloc(NULL, size, MEM_RESERVE, PAGE_READWRITE);
+}
+
+static bool memory_extra_vss_commit(void* ptr, size_t size, bool writable, int tag)
+{
+    PAS_UNUSED_PARAM(writable);
+    PAS_UNUSED_PARAM(tag);
+    return VirtualAlloc(ptr, size, MEM_COMMIT, PAGE_READWRITE);
+}
+#endif
+
 _Static_assert(PAS_COMPACT_HEAP_RESERVATION_SIZE
                <= ((size_t)1 << PAS_COMPACT_PTR_BITS << PAS_OVERALIGNED_COMPACT_PTR_ALIGN_SHIFT),
                "PAS_DEFINE_OVERALIGNED_COMPACT_PTR must be able to reach the whole compact heap reservation");
@@ -47,7 +75,7 @@ size_t pas_compact_heap_reservation_available_size = 0;
 size_t pas_compact_heap_reservation_bump = 0;
 size_t pas_compact_heap_reservation_top_bump = 0;
 
-#if PAS_PLATFORM(PLAYSTATION)
+#if PAS_COMPACT_HEAP_RESERVATION_COMMITS_LAZILY
 uintptr_t pas_compact_heap_reservation_committed = 0;
 uintptr_t pas_compact_heap_reservation_top_committed = 0;
 #endif
@@ -59,7 +87,7 @@ static void initialize_if_necessary(void)
     if (pas_compact_heap_reservation_base)
         return;
 
-#if PAS_PLATFORM(PLAYSTATION)
+#if PAS_COMPACT_HEAP_RESERVATION_COMMITS_LAZILY
     pas_zero_memory(&page_result, sizeof(pas_aligned_allocation_result));
 
     page_result.result = memory_extra_vss_reserve(pas_compact_heap_reservation_size, pas_page_malloc_alignment());
@@ -84,7 +112,7 @@ static void initialize_if_necessary(void)
     // as anything they point at.
     PAS_ASSERT(pas_is_aligned(pas_compact_heap_reservation_base, PAS_OVERALIGNED_COMPACT_PTR_ALIGN));
 
-#if PAS_PLATFORM(PLAYSTATION)
+#if PAS_COMPACT_HEAP_RESERVATION_COMMITS_LAZILY
     pas_compact_heap_reservation_committed =
         pas_compact_heap_reservation_base + pas_compact_heap_reservation_guard_size;
     pas_compact_heap_reservation_top_committed = pas_round_up_to_power_of_2(
@@ -118,7 +146,7 @@ static pas_aligned_allocation_result try_allocate_bottom(size_t size, size_t ali
 
     pas_compact_heap_reservation_bump = allocation_end - pas_compact_heap_reservation_base;
 
-#if PAS_PLATFORM(PLAYSTATION)
+#if PAS_COMPACT_HEAP_RESERVATION_COMMITS_LAZILY
     if (pas_compact_heap_reservation_committed < allocation_end && size > 0) {
         uintptr_t need_commit_start;
         uintptr_t need_commit_end;
@@ -182,7 +210,7 @@ static pas_aligned_allocation_result try_allocate_top(size_t size, size_t alignm
 
     pas_compact_heap_reservation_top_bump = allocation_start - pas_compact_heap_reservation_base;
 
-#if PAS_PLATFORM(PLAYSTATION)
+#if PAS_COMPACT_HEAP_RESERVATION_COMMITS_LAZILY
     if (pas_compact_heap_reservation_top_committed > allocation_start && size > 0) {
         uintptr_t need_commit_start;
         uintptr_t need_commit_end;
