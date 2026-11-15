@@ -29,6 +29,10 @@
 #if USE(SKIA)
 #include "FontRenderOptions.h"
 #include "GLContext.h"
+#if PLATFORM(WIN)
+#include "D3D11SharedTexture.h"
+#include <wtf/MonotonicTime.h>
+#endif
 
 WTF_IGNORE_WARNINGS_IN_THIRD_PARTY_CODE_BEGIN
 #include <skia/core/SkColorSpace.h>
@@ -94,6 +98,35 @@ static sk_sp<const GrGLInterface> skiaGLInterface()
 }
 
 static thread_local RefPtr<SkiaGLContext> s_skiaGLContext;
+
+#if PLATFORM(WIN)
+// Glass: why this thread's Skia context couldn't be made (for the GPU process's log), and when it was last tried. A GPU
+// process that replaces one that ended with the graphics device (a driver reset) can fail to make it at first; it is
+// tried again, at most once a second, instead of the thread drawing on the processor for good.
+static thread_local const char* s_skiaGLContextFailure;
+static thread_local MonotonicTime s_skiaGLContextTried;
+
+static const char* eglFailure(const char* what)
+{
+    // Literals: the GPU process's log reports a reason once per change of pointer.
+    switch (eglGetError()) {
+    case EGL_SUCCESS: return what;
+    case EGL_NOT_INITIALIZED: return "no Skia GL context (EGL_NOT_INITIALIZED)";
+    case EGL_BAD_ALLOC: return "no Skia GL context (EGL_BAD_ALLOC)";
+    case EGL_BAD_CONFIG: return "no Skia GL context (EGL_BAD_CONFIG)";
+    case EGL_BAD_CONTEXT: return "no Skia GL context (EGL_BAD_CONTEXT)";
+    case EGL_BAD_DISPLAY: return "no Skia GL context (EGL_BAD_DISPLAY)";
+    case EGL_BAD_MATCH: return "no Skia GL context (EGL_BAD_MATCH)";
+    case EGL_CONTEXT_LOST: return "no Skia GL context (EGL_CONTEXT_LOST)";
+    default: return "no Skia GL context (other EGL error)";
+    }
+}
+
+const char* skiaGLContextFailure()
+{
+    return s_skiaGLContextFailure;
+}
+#endif
 
 #if USE(LIBDRM)
 static inline bool isNewIntelDevice()
@@ -335,8 +368,21 @@ private:
 
     explicit SkiaGLContext(std::unique_ptr<GLContext>&& glContext)
     {
+#if PLATFORM(WIN)
+        s_skiaGLContextTried = MonotonicTime::now();
+        if (!glContext) {
+            s_skiaGLContextFailure = eglFailure("no Skia GL context (offscreen context not made)");
+            return;
+        }
+        if (!glContext->makeContextCurrent()) {
+            s_skiaGLContextFailure = eglFailure("no Skia GL context (not made current)");
+            return;
+        }
+        s_skiaGLContextFailure = "no Skia GL context (no GrDirectContext)";
+#else
         if (!glContext || !glContext->makeContextCurrent())
             return;
+#endif
 
         // FIXME: Add shader cache.
         GrContextOptions options;
@@ -346,8 +392,16 @@ private:
         // lookup which is a slow-path in certain tiled GPUs (such as Vivante/etnaviv). Since we
         // don't use any mipmapping, it's safe to disable that, and avoid performance hits.
         options.fSharpenMipmappedTextures = false;
+#if PLATFORM(WIN)
+        // One pool for the process, never destroyed. A thread-local pool is destroyed as its thread exits, under the
+        // Windows loader lock, and its destructor joins the pool's threads, which need that lock to exit: the thread
+        // never ends. Skia's pool takes work from several contexts' threads.
+        static SkExecutor* s_executor = SkExecutor::MakeFIFOThreadPool(2).release();
+        options.fExecutor = s_executor;
+#else
         thread_local std::unique_ptr<SkExecutor> s_executor = SkExecutor::MakeFIFOThreadPool(2);
         options.fExecutor = s_executor.get();
+#endif
         if (auto bytes = glyphCacheTextureMaximumBytes())
             options.fGlyphCacheTextureMaximumBytes = *bytes;
 
@@ -356,6 +410,9 @@ private:
             m_skiaGrContext = WTF::move(grContext);
             m_sampleCount = initializeMSAASampleCount(m_skiaGrContext.get());
             m_maxResourceCacheBytes = initializeMaxResourceCacheBytes(m_skiaGrContext.get());
+#if PLATFORM(WIN)
+            s_skiaGLContextFailure = nullptr;
+#endif
         }
     }
 
@@ -369,7 +426,17 @@ private:
 
 GLContext* PlatformDisplay::skiaGLContext()
 {
-#if PLATFORM(GTK) || PLATFORM(WPE) || (PLATFORM(PLAYSTATION) && !USE(COORDINATED_GRAPHICS))
+#if PLATFORM(WIN)
+    // Off unless Glass's GPU drawing asked for it (D3D11SharedTexture.h): with a context, any accelerated image buffer
+    // made in this process would be drawn on the GPU, which Windows hasn't done before.
+    if (!D3D11SharedTextures::skiaGPUContextsEnabled())
+        return nullptr;
+#endif
+#if PLATFORM(GTK) || PLATFORM(WPE) || PLATFORM(WIN) || (PLATFORM(PLAYSTATION) && !USE(COORDINATED_GRAPHICS))
+#if PLATFORM(WIN)
+    if (s_skiaGLContext && !s_skiaGLContext->skiaGLContext() && MonotonicTime::now() - s_skiaGLContextTried >= 1_s)
+        s_skiaGLContext = nullptr;
+#endif
     if (!s_skiaGLContext) {
         s_skiaGLContext = SkiaGLContext::create(*this);
         m_skiaGLContexts.add(*s_skiaGLContext);

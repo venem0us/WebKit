@@ -60,6 +60,15 @@ DrawingAreaWC::DrawingAreaWC(WebPage& webPage, const WebPageCreationParameters& 
     , m_updateRenderingTimer(*this, &DrawingAreaWC::updateRendering)
     , m_commitQueue(WorkQueue::create("DrawingAreaWC CommitQueue"_s))
 {
+#if OS(WINDOWS)
+    // After the other clients (the rendering backend's image buffers) have handled the close too.
+    m_remoteWCLayerTreeHostProxy->setGPUProcessDidCloseHandler([weakThis = WeakPtr { *this }](GPUProcessConnectionIdentifier connection) {
+        RunLoop::mainSingleton().dispatch([weakThis, connection] {
+            if (weakThis)
+                weakThis->gpuProcessDidClose(connection);
+        });
+    });
+#endif
 }
 
 DrawingAreaWC::~DrawingAreaWC()
@@ -209,7 +218,11 @@ void DrawingAreaWC::scroll(const IntRect& scrollRect, const IntSize& scrollDelta
 void DrawingAreaWC::updateRenderingWithForcedRepaintAsync(WebPage&, CompletionHandler<void()>&& completionHandler)
 {
     m_forceRepaintCompletionHandler = WTF::move(completionHandler);
-    m_isForceRepaintCompletionHandlerDeferred = m_waitDidUpdate;
+#if OS(WINDOWS)
+    m_forceRepaintUpdatesToSkip = m_updatesInFlight;
+#else
+    m_forceRepaintUpdatesToSkip = m_waitDidUpdate ? 1 : 0;
+#endif
     setNeedsDisplay();
 }
 
@@ -286,16 +299,21 @@ void DrawingAreaWC::updateRendering()
     ASSERT(!m_waitDidUpdate);
     m_waitDidUpdate = true;
 #if OS(WINDOWS)
+    bool pipelined = m_updatesInFlight++;
     DisplayRefreshMonitor::traceRenderingEvent('U');
 #endif
 #if OS(WINDOWS)
     if (m_renderingStats) {
         m_renderingStats->updateStartUs = RenderingUpdateStats::now();
+        m_updateStartsUs.append(m_renderingStats->updateStartUs);
+        if (pipelined)
+            ++m_renderingStats->pipelinedUpdates;
         m_renderingStats->fenceDoneUs = 0;
         m_renderingStats->compositorSentUs = 0;
         m_renderingStats->uiSentUs = 0;
         ++m_renderingStats->updates;
     }
+    RenderingUpdateStats::noteStage(RenderingUpdateStats::Stage::Web);
 #endif
 
     Ref webPage = m_webPage.get();
@@ -324,8 +342,32 @@ void DrawingAreaWC::updateRendering()
 #if OS(WINDOWS)
     if (m_renderingStats && m_renderingStats->updateStartUs)
         m_renderingStats->web.add(RenderingUpdateStats::now() - m_renderingStats->updateStartUs);
+    // The next update (the next display tick's) may start while this one is still being drawn and composited.
+    if (m_waitDidUpdate && m_updatesInFlight == 1 && canPipelineRenderingUpdate())
+        m_waitDidUpdate = false;
 #endif
 }
+
+#if OS(WINDOWS)
+// Glass: with GPU tiles, waiting for the GPU process to draw an update's tiles (the fence) took longer than drawing them
+// on the processor (each small processor-drawn image is a texture upload), and the next update couldn't start until
+// the whole update was displayed: the page's script plus that wait made frames miss the display (MotionMark Images 20%
+// lower). The next update's script and painting now overlap this one's drawing and compositing. That is safe for
+// tiles: every tile update draws into a new image buffer, which the compositor copies in update order, and the GPU
+// process draws both updates' tiles in the order they were recorded. Not with a WebGL layer that changed (its display
+// buffers are shown directly), with a forced repaint waiting, or on a page that isn't composited.
+// Only with GLASS_PIPELINE_UPDATES=1: on the GPU PC it didn't help (1.19.63: the page's script got as much slower as the
+// wait it hid, and MotionMark Images scored 7% lower), the cost being small layers' GPU tiles (drawsLayerOnProcessor).
+bool DrawingAreaWC::canPipelineRenderingUpdate()
+{
+    static const bool enabled = [] {
+        auto* value = std::getenv("GLASS_PIPELINE_UPDATES");
+        return value && *value == '1';
+    }();
+    return enabled && RemoteRenderingBackendProxy::gpuRasterEnabled(RenderingPurpose::DOM) && !m_lastUpdateChangedPlatformLayers
+        && !m_forceRepaintCompletionHandler && isCompositingMode();
+}
+#endif
 
 void DrawingAreaWC::sendUpdateAC()
 {
@@ -362,6 +404,12 @@ void DrawingAreaWC::sendUpdateAC()
 
 #if OS(WINDOWS)
         RefPtr stats = willCallDisplayDidRefresh ? m_renderingStats : nullptr;
+        if (!i)
+            m_lastUpdateChangedPlatformLayers = false;
+        for (auto& layer : m_updateInfo.changedLayers) {
+            if (!layer.platformLayer.identifiers.isEmpty())
+                m_lastUpdateChangedPlatformLayers = true;
+        }
 #endif
         m_commitQueue->dispatch([this, weakThis = WeakPtr(*this), stateID = m_backingStoreStateID, updateInfo = std::exchange(m_updateInfo, { }), fence = WTF::move(fence), willCallDisplayDidRefresh
 #if OS(WINDOWS)
@@ -370,6 +418,7 @@ void DrawingAreaWC::sendUpdateAC()
             ]() mutable {
 #if OS(WINDOWS)
             auto fenceStart = stats ? RenderingUpdateStats::now() : 0;
+            RenderingUpdateStats::noteStage(RenderingUpdateStats::Stage::Fence);
 #endif
             fence();
 #if OS(WINDOWS)
@@ -378,6 +427,7 @@ void DrawingAreaWC::sendUpdateAC()
                 stats->gpuPaint.add(done - fenceStart);
                 stats->fenceDoneUs = done;
             }
+            RenderingUpdateStats::noteStage(RenderingUpdateStats::Stage::Hop);
 #endif
             RunLoop::mainSingleton().dispatch([this, weakThis = WTF::move(weakThis), stateID, updateInfo = WTF::move(updateInfo), willCallDisplayDidRefresh
 #if OS(WINDOWS)
@@ -394,6 +444,7 @@ void DrawingAreaWC::sendUpdateAC()
                     stats->compositorSentUs = nowUs;
                     ++stats->compositedUpdates;
                 }
+                RenderingUpdateStats::noteStage(RenderingUpdateStats::Stage::Compositor);
 #endif
                 m_remoteWCLayerTreeHostProxy->update(WTF::move(updateInfo), [this, weakThis = WTF::move(weakThis), stateID, willCallDisplayDidRefresh
 #if OS(WINDOWS)
@@ -413,6 +464,9 @@ void DrawingAreaWC::sendUpdateAC()
 #endif
                     if (updateInfo && stateID == m_backingStoreStateID) {
                         ASSERT(willCallDisplayDidRefresh);
+#if OS(WINDOWS)
+                        RenderingUpdateStats::noteStage(RenderingUpdateStats::Stage::UI);
+#endif
                         send(Messages::DrawingAreaProxy::Update(m_backingStoreStateID, WTF::move(*updateInfo)));
                         return;
                     }
@@ -461,7 +515,7 @@ void DrawingAreaWC::sendUpdateNonAC()
     ASSERT(webPage->bounds().contains(bounds));
     IntSize bitmapSize = bounds.size();
     float deviceScaleFactor = webPage->corePage()->deviceScaleFactor();
-    auto image = createImageBuffer(bitmapSize, deviceScaleFactor);
+    auto image = createBitmapImageBuffer(bitmapSize, deviceScaleFactor);
     auto rects = m_dirtyRegion.rects();
     if (shouldPaintBoundsRect(bounds, rects)) {
         rects.clear();
@@ -497,6 +551,7 @@ void DrawingAreaWC::sendUpdateNonAC()
         ]() mutable {
 #if OS(WINDOWS)
         auto fenceStart = stats ? RenderingUpdateStats::now() : 0;
+        RenderingUpdateStats::noteStage(RenderingUpdateStats::Stage::Fence);
 #endif
         fence();
 #if OS(WINDOWS)
@@ -505,6 +560,7 @@ void DrawingAreaWC::sendUpdateNonAC()
             stats->gpuPaint.add(done - fenceStart);
             stats->fenceDoneUs = done;
         }
+        RenderingUpdateStats::noteStage(RenderingUpdateStats::Stage::Hop);
 #endif
         RunLoop::mainSingleton().dispatch([this, weakThis = WTF::move(weakThis), stateID, updateInfo = WTF::move(updateInfo), image = WTF::move(image)
 #if OS(WINDOWS)
@@ -532,10 +588,32 @@ void DrawingAreaWC::sendUpdateNonAC()
                     updateInfo.bitmapHandle = std::get<ShareableBitmap::Handle>(WTF::move(*handle));
             }
 
+#if OS(WINDOWS)
+            RenderingUpdateStats::noteStage(RenderingUpdateStats::Stage::UI);
+#endif
             send(Messages::DrawingAreaProxy::Update(stateID, WTF::move(updateInfo)));
         });
     });
 }
+
+#if OS(WINDOWS)
+void DrawingAreaWC::gpuProcessDidClose(GPUProcessConnectionIdentifier connection)
+{
+    // Glass: the GPU process has gone (a crash, or Windows resetting the graphics driver), and the next update starts a
+    // new one whose scene is empty. Every layer is described to it again, whole, with its tiles painted anew. It used to
+    // get only what changed next, layers it didn't have were skipped, and composited pages stayed blank.
+    bool onProcessor = RemoteRenderingBackendProxy::noteGPUProcessLost();
+    // The page's image buffers first (an update still waiting on the gone process gives up), then its layers.
+    Ref { m_webPage.get() }->ensureRemoteRenderingBackendProxy().gpuProcessDidClose(connection);
+    unsigned layers = 0;
+    for (auto* layer = m_liveGraphicsLayers.head(); layer; layer = layer->next(), ++layers) {
+        m_updateInfo.addedLayers.append(*layer->primaryLayerID());
+        layer->resyncWithNewCompositor();
+    }
+    RenderingUpdateStats::noteGPUProcessResync(layers, onProcessor);
+    triggerRenderingUpdate();
+}
+#endif
 
 void DrawingAreaWC::graphicsLayerAdded(GraphicsLayerWC& layer)
 {
@@ -554,7 +632,39 @@ void DrawingAreaWC::commitLayerUpdateInfo(WCLayerUpdateInfo&& info)
     m_updateInfo.changedLayers.append(WTF::move(info));
 }
 
-RefPtr<ImageBuffer> DrawingAreaWC::createImageBuffer(FloatSize size, float deviceScaleFactor)
+#if OS(WINDOWS)
+// Glass: a small layer's tiles are drawn on the processor even with GLASS_GPU_RASTER. MotionMark's Images test puts
+// hundreds of 50x50 canvases on their own layers and repaints each every frame; on the GPU every one of those tiles cost
+// a surface, a flush, a texture upload of the canvas and a copy into the compositor's texture, which made the test 25%
+// slower than drawing them all on the processor. GLASS_GPU_TILE_MIN_PIXELS sets the smallest layer (in device pixels)
+// drawn on the GPU: 128x128 by default, 0 for every layer.
+static bool drawsLayerOnProcessor(FloatSize layerSize, float deviceScaleFactor)
+{
+    static const double minimumPixels = [] {
+        auto* value = std::getenv("GLASS_GPU_TILE_MIN_PIXELS");
+        return value && *value ? std::atof(value) : 128.0 * 128.0;
+    }();
+    return layerSize.area() * deviceScaleFactor * deviceScaleFactor < minimumPixels;
+}
+#endif
+
+RefPtr<ImageBuffer> DrawingAreaWC::createImageBuffer(FloatSize size, float deviceScaleFactor, FloatSize layerSize)
+{
+#if OS(WINDOWS)
+    // GLASS_GPU_RASTER=1: layer tiles are drawn on the GPU, in the GPU process, which falls back to a bitmap where it can't.
+    if (RemoteRenderingBackendProxy::gpuRasterEnabled(RenderingPurpose::DOM) && WebProcess::singleton().shouldUseRemoteRenderingFor(RenderingPurpose::DOM)) {
+        if (!drawsLayerOnProcessor(layerSize, deviceScaleFactor))
+            return Ref { m_webPage.get() }->ensureRemoteRenderingBackendProxy().createImageBuffer(size, RenderingMode::Accelerated, RenderingPurpose::DOM, deviceScaleFactor, ColorSpace::SRGB(), { PixelFormat::BGRA8 });
+        if (m_renderingStats)
+            ++m_renderingStats->smallLayerTiles;
+    }
+#else
+    UNUSED_PARAM(layerSize);
+#endif
+    return createBitmapImageBuffer(size, deviceScaleFactor);
+}
+
+RefPtr<ImageBuffer> DrawingAreaWC::createBitmapImageBuffer(FloatSize size, float deviceScaleFactor)
 {
     if (WebProcess::singleton().shouldUseRemoteRenderingFor(RenderingPurpose::DOM))
         return Ref { m_webPage.get() }->ensureRemoteRenderingBackendProxy().createImageBuffer(size, RenderingMode::Unaccelerated, RenderingPurpose::DOM, deviceScaleFactor, ColorSpace::SRGB(), { PixelFormat::BGRA8 });
@@ -573,8 +683,9 @@ void DrawingAreaWC::displayDidRefresh(MonotonicTime uiTime)
 #if OS(WINDOWS)
     if (m_renderingStats) {
         auto nowUs = RenderingUpdateStats::now();
-        if (auto start = m_renderingStats->updateStartUs.exchange(0))
-            m_renderingStats->cycle.add(nowUs - start);
+        m_renderingStats->updateStartUs = 0;
+        if (!m_updateStartsUs.isEmpty())
+            m_renderingStats->cycle.add(nowUs - m_updateStartsUs.takeFirst());
         if (auto sent = m_renderingStats->uiSentUs.exchange(0)) {
             m_renderingStats->ui.add(nowUs - sent);
             // The UI process's reply carries the time it handled the update.
@@ -587,19 +698,26 @@ void DrawingAreaWC::displayDidRefresh(MonotonicTime uiTime)
         m_renderingStats->reportIfDue();
     }
 #endif
-    m_waitDidUpdate = false;
 #if OS(WINDOWS)
+    if (m_updatesInFlight)
+        --m_updatesInFlight;
+    // One still in flight: another may start only if it could have started alongside it.
+    m_waitDidUpdate = m_updatesInFlight && !canPipelineRenderingUpdate();
     DisplayRefreshMonitor::traceRenderingEvent('G');
+    if (!m_updatesInFlight)
+        RenderingUpdateStats::noteStage(RenderingUpdateStats::Stage::Idle);
+#else
+    m_waitDidUpdate = false;
 #endif
     didCompleteRenderingUpdateDisplay();
     didCompleteRenderingFrame();
     if (m_forceRepaintCompletionHandler) {
-        if (m_isForceRepaintCompletionHandlerDeferred)
-            m_isForceRepaintCompletionHandlerDeferred = false;
+        if (m_forceRepaintUpdatesToSkip)
+            --m_forceRepaintUpdatesToSkip;
         else
             m_forceRepaintCompletionHandler();
     }
-    if (m_hasDeferredRenderingUpdate) {
+    if (m_hasDeferredRenderingUpdate && !m_waitDidUpdate) {
         m_hasDeferredRenderingUpdate = false;
 #if OS(WINDOWS)
         // The GPU's reply is handled at the top of the run loop, like a display tick, so run the update

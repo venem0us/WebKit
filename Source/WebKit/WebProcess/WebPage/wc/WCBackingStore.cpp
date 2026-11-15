@@ -36,7 +36,8 @@ namespace WebKit {
 
 WTF_MAKE_TZONE_ALLOCATED_IMPL(WCBackingStore);
 
-WCBackingStore::WCBackingStore(std::optional<ImageBufferBackendHandle>&& handle)
+WCBackingStore::WCBackingStore(std::optional<ImageBufferBackendHandle>&& handle, std::optional<WebCore::RenderingResourceIdentifier>&& acceleratedBufferIdentifier)
+    : m_acceleratedBufferIdentifier(WTF::move(acceleratedBufferIdentifier))
 {
     if (auto* imageHandle = handle ? std::get_if<WebCore::ShareableBitmap::Handle>(&*handle) : nullptr)
         m_bitmap = WebCore::ShareableBitmap::create(WTF::move(*imageHandle));
@@ -53,11 +54,22 @@ std::optional<ImageBufferBackendHandle> WCBackingStore::handle() const
         return std::nullopt;
     }
 
+    // An accelerated buffer has no handle to give, and asking costs a round trip to the GPU process.
+    if (m_imageBuffer->renderingMode() == WebCore::RenderingMode::Accelerated)
+        return std::nullopt;
+
     auto* sharing = m_imageBuffer->toBackendSharing();
     if (!is<ImageBufferBackendHandleSharing>(sharing))
         return std::nullopt;
 
     return dynamicDowncast<ImageBufferBackendHandleSharing>(*sharing)->createBackendHandle();
+}
+
+std::optional<WebCore::RenderingResourceIdentifier> WCBackingStore::acceleratedBufferIdentifier() const
+{
+    if (m_imageBuffer && m_imageBuffer->renderingMode() == WebCore::RenderingMode::Accelerated)
+        return m_imageBuffer->renderingResourceIdentifier();
+    return m_acceleratedBufferIdentifier;
 }
 
 } // namespace WebKit

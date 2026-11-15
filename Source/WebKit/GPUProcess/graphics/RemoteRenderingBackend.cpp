@@ -64,6 +64,11 @@
 #include <WebCore/ImageBufferDisplayListBackend.h>
 #include <WebCore/NullImageBufferBackend.h>
 #include <WebCore/RenderingResourceIdentifier.h>
+#if USE(SKIA) && PLATFORM(WIN)
+#include "ImageBufferBackendHandleSharing.h"
+#include "WCBitmapFallbacks.h"
+#include <WebCore/D3D11SharedTexture.h>
+#endif
 #include <wtf/CheckedArithmetic.h>
 #include <wtf/RunLoop.h>
 #include <wtf/StdLibExtras.h>
@@ -166,6 +171,10 @@ void RemoteRenderingBackend::workQueueUninitialize()
     m_remoteSnapshotRecorders.clear();
     // Make sure we destroy the ResourceCache on the WorkQueue since it gets populated on the WorkQueue.
     m_remoteResourceCache.releaseAllResources();
+#if USE(SKIA) && PLATFORM(WIN)
+    // The buffers are gone; their pooled textures and this thread's Skia context go now, not at thread exit.
+    D3D11SharedTextures::releaseThreadResources();
+#endif
 
     Ref streamConnection = m_streamConnection;
     streamConnection->stopReceivingMessages(Messages::RemoteRenderingBackend::messageReceiverName(), m_renderingBackendIdentifier.toUInt64());
@@ -300,6 +309,19 @@ void RemoteRenderingBackend::sinkSnapshotRecorderIntoSnapshotFrame(RemoteSnapsho
     completionHandler(true);
 }
 
+#if USE(SKIA) && PLATFORM(WIN)
+// GLASS_GPU_RASTER=1: accelerated image buffers are drawn by Skia on the GPU, into textures the compositor reads directly
+// (step 6 of Glass's roadmap; off by default while it's built up). Otherwise they fall back to shared bitmaps.
+static bool gpuRasterEnabled()
+{
+    static const bool enabled = [] {
+        const char* value = std::getenv("GLASS_GPU_RASTER");
+        return value && (!std::strcmp(value, "1") || !std::strcmp(value, "tiles"));
+    }();
+    return enabled;
+}
+#endif
+
 template<typename ImageBufferType>
 static RefPtr<ImageBuffer> allocateImageBufferInternal(const FloatSize& logicalSize, RenderingMode renderingMode, RenderingPurpose purpose, float resolutionScale, const ColorSpace& colorSpace, ImageBufferFormat bufferFormat, ImageBufferCreationContext& creationContext)
 {
@@ -312,6 +334,20 @@ static RefPtr<ImageBuffer> allocateImageBufferInternal(const FloatSize& logicalS
             imageBuffer = ImageBuffer::create<ImageBufferShareableMappedIOSurfaceBitmapBackend, ImageBufferType>(logicalSize, resolutionScale, colorSpace, bufferFormat, purpose, creationContext);
         if (!imageBuffer)
             imageBuffer = ImageBuffer::create<ImageBufferShareableMappedIOSurfaceBackend, ImageBufferType>(logicalSize, resolutionScale, colorSpace, bufferFormat, purpose, creationContext);
+#endif
+#if USE(SKIA) && PLATFORM(WIN)
+        if (!imageBuffer && gpuRasterEnabled()) {
+            ImageBuffer::Parameters parameters { logicalSize, resolutionScale, colorSpace, bufferFormat, purpose };
+            if (auto backend = D3D11SharedTextures::createSkiaBackend(parameters, creationContext))
+                imageBuffer = ImageBuffer::create<ImageBufferType>(parameters, creationContext, WTF::move(backend));
+            if (auto* stats = GPURenderingStats::singletonIfEnabled()) {
+                ++(imageBuffer ? stats->gpuBuffers : stats->gpuBufferFailures);
+                if (imageBuffer && D3D11SharedTextures::lastWasReused())
+                    ++stats->gpuBuffersReused;
+                if (!imageBuffer)
+                    stats->noteGPUBufferFailure(D3D11SharedTextures::lastFailure());
+            }
+        }
 #endif
         [[fallthrough]];
 
@@ -431,6 +467,16 @@ void RemoteRenderingBackend::createImageBufferWithBackingStore(const FloatSize& 
         RELEASE_ASSERT(imageBuffer);
         streamConnection().send(Messages::RemoteImageBufferProxy::DidFailToCreateBackend(), identifier);
     }
+#if USE(SKIA) && PLATFORM(WIN)
+    // The compositor finds a GPU-drawn buffer's texture by the name the web process gives it in a layer update.
+    // One that couldn't be made on the GPU is a bitmap: kept under the same name, for the compositor to upload.
+    if (auto* sharing = imageBuffer->toBackendSharing(); sharing && sharing->isD3D11SharedTextureSharing())
+        D3D11SharedTextures::setAlias(m_gpuConnectionToWebProcess->webProcessIdentifier().toUInt64(), identifier.toUInt64(), static_cast<D3D11SharedTextureSharing*>(sharing)->identifier());
+    else if (renderingMode == RenderingMode::Accelerated && gpuRasterEnabled()) {
+        if (auto* handleSharing = dynamicDowncast<ImageBufferBackendHandleSharing>(imageBuffer->toBackendSharing()))
+            WCBitmapFallbacks::set({ m_gpuConnectionToWebProcess->webProcessIdentifier().toUInt64(), identifier.toUInt64() }, handleSharing->bitmap());
+    }
+#endif
     auto result = m_remoteImageBuffers.add(identifier, RemoteImageBuffer::create(imageBuffer.releaseNonNull(), identifier, contextIdentifier, *this));
     MESSAGE_CHECK(result.isNewEntry, "Duplicate ImageBuffers");
 }

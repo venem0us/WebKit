@@ -124,6 +124,11 @@ protected:
     // committed recording state.
     WEBCORE_EXPORT GraphicsContextState::ChangeFlags computeStateChanges();
     WEBCORE_EXPORT void commitStateChanges(GraphicsContextState::ChangeFlags);
+#if PLATFORM(WIN)
+    // Glass: what was recorded went to a GPU process that has gone, and the context in the next one starts from the
+    // default state. Every property set here is written out again before the next drawing.
+    WEBCORE_EXPORT void forgetCommittedState();
+#endif
 
     const ColorSpace& colorSpace() const LIFETIME_BOUND final { return m_colorSpace; }
 

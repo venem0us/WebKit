@@ -99,10 +99,13 @@ void CanvasRenderingContext::deref() const
 
 bool CanvasRenderingContext::delegatesDisplay() const
 {
-#if USE(SKIA)
+#if USE(SKIA) && !PLATFORM(WIN)
     if (auto* context2D = dynamicDowncast<CanvasRenderingContext2DBase>(*this))
         return context2D->isAccelerated();
 #endif
+    // Glass: on Windows an accelerated 2D canvas's buffer lives in the GPU process and has no display delegate here, so
+    // a canvas shown "as layer contents" showed nothing. It is painted into its layer like an unaccelerated one; the
+    // GPU process draws it into the layer's tiles on the GPU.
     return isPlaceholder() || isGPUBased();
 }
 

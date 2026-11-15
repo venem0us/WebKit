@@ -101,6 +101,9 @@ class ImageBufferBackendSharing {
 public:
     virtual ~ImageBufferBackendSharing() = default;
     virtual bool isImageBufferBackendHandleSharing() const { return false; }
+#if PLATFORM(WIN)
+    virtual bool isD3D11SharedTextureSharing() const { return false; }
+#endif
 };
 
 class ImageBufferBackend {

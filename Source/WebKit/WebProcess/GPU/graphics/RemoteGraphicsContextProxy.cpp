@@ -994,6 +994,11 @@ std::optional<RemoteGraphicsContextProxy::InlineStrokeData> RemoteGraphicsContex
 void RemoteGraphicsContextProxy::disconnect()
 {
     m_connection = nullptr;
+#if PLATFORM(WIN)
+    // Glass: a canvas that keeps drawing after the GPU process has gone (its pixels are lost) would otherwise draw with
+    // the new context's default colours, the stroke style it set before showing black.
+    forgetCommittedState();
+#endif
 #if PLATFORM(COCOA) && ENABLE(VIDEO)
     Locker locker { m_sharedVideoFrameWriterLock };
     if (m_sharedVideoFrameWriter) {

@@ -52,6 +52,10 @@ public:
 
     RenderingMode renderingMode() const final { return RenderingMode::Accelerated; }
 
+    // How another thread or process finds this buffer's pixels on the GPU (on Windows, a texture shared with the
+    // compositor: see D3D11SharedTexture.h). Set once, by whoever created the surface.
+    void setBackendSharing(std::unique_ptr<ImageBufferBackendSharing>&& sharing) { m_backendSharing = WTF::move(sharing); }
+
 private:
     ImageBufferSkiaAcceleratedBackend(const ImageBufferParameters&, sk_sp<SkSurface>&&);
 
@@ -64,6 +68,8 @@ private:
 
     void getPixelBuffer(const IntRect&, PixelBuffer&) final;
     void putPixelBuffer(const PixelBufferSourceView&, const IntRect& srcRect, const IntPoint& destPoint, AlphaPremultiplication destFormat) final;
+
+    ImageBufferBackendSharing* toBackendSharing() final { return m_backendSharing.get(); }
 
     GrDirectContext* grContext() const;
     void replayCanvasRecordingContextIfNeeded();
@@ -79,6 +85,7 @@ private:
     SkPictureRecorder m_pictureRecorder;
     const std::unique_ptr<SkiaSwitchableCanvas> m_switchableCanvas;
     const std::unique_ptr<GraphicsContextSkia> m_canvasRecordingContext;
+    std::unique_ptr<ImageBufferBackendSharing> m_backendSharing;
 };
 
 } // namespace WebCore

@@ -611,6 +611,35 @@ void GraphicsLayerWC::noteLayerPropertyChanged(OptionSet<WCLayerChange> flags, S
         client().notifyFlushRequired(this);
 }
 
+#if OS(WINDOWS)
+void GraphicsLayerWC::resyncWithNewCompositor()
+{
+    // Every property (the flags carrying something to read, not RepaintCount, which the paint adds), and every tile new.
+    m_tiledBacking->discardTiles();
+    m_lastVideoFrame = nullptr;
+    noteLayerPropertyChanged({ WCLayerChange::Children, WCLayerChange::MaskLayer, WCLayerChange::ReplicaLayer, WCLayerChange::Position,
+        WCLayerChange::AnchorPoint, WCLayerChange::Size, WCLayerChange::BoundsOrigin, WCLayerChange::MasksToBounds,
+        WCLayerChange::ContentsRectClipsDescendants, WCLayerChange::ShowDebugBorder, WCLayerChange::ShowRepaintCounter,
+        WCLayerChange::ContentsVisible, WCLayerChange::BackfaceVisibility, WCLayerChange::Preserves3D, WCLayerChange::SolidColor,
+        WCLayerChange::DebugBorderColor, WCLayerChange::Opacity, WCLayerChange::DebugBorderWidth, WCLayerChange::ContentsRect,
+        WCLayerChange::Background, WCLayerChange::Transform, WCLayerChange::ChildrenTransform, WCLayerChange::Filters,
+        WCLayerChange::BackdropFilters, WCLayerChange::BackdropFiltersRect, WCLayerChange::ContentsClippingRect,
+        WCLayerChange::PlatformLayer });
+    // A remote frame only where there is one: "no host" means "release the one you had" there.
+    if (m_hostIdentifier)
+        noteLayerPropertyChanged(WCLayerChange::RemoteFrame);
+#if ENABLE(VIDEO)
+    // A video sending its frames straight to the old process sends them to the new one instead (and its current frame
+    // at once, so a paused video isn't left blank).
+    if (m_mediaPlayer && m_mediaPlayerHasFrameSink && m_observer) {
+        RefPtr sink = m_observer->createVideoFrameSink(m_layerID);
+        m_mediaPlayerHasFrameSink = !!sink;
+        WebCore::setCompositorFrameSink(*m_mediaPlayer, WTF::move(sink));
+    }
+#endif
+}
+#endif
+
 void GraphicsLayerWC::flushCompositingState(const FloatRect& passedVisibleRect)
 {
     // passedVisibleRect doesn't contain the scrollbar area. Inflate it.
@@ -747,7 +776,7 @@ TiledBacking* GraphicsLayerWC::tiledBacking() const
 
 RefPtr<WebCore::ImageBuffer> GraphicsLayerWC::createImageBuffer(WebCore::FloatSize size, float deviceScaleFactor)
 {
-    return m_observer->createImageBuffer(size, deviceScaleFactor);
+    return m_observer->createImageBuffer(size, deviceScaleFactor, this->size());
 }
 
 static inline bool accumulatesTransform(const GraphicsLayerWC& layer)

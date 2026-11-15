@@ -1562,6 +1562,15 @@ WebLoaderStrategy& WebProcess::webLoaderStrategy()
 
 #if ENABLE(GPU_PROCESS)
 
+#if OS(WINDOWS)
+// Glass: whether this process has had a GPU process connection close (main thread).
+static bool& gpuProcessConnectionWasLost()
+{
+    static bool lost;
+    return lost;
+}
+#endif
+
 GPUProcessConnection& WebProcess::ensureGPUProcessConnection()
 {
     RELEASE_ASSERT(RunLoop::isMain());
@@ -1581,6 +1590,20 @@ GPUProcessConnection& WebProcess::ensureGPUProcessConnection()
         protect(parentProcessConnection())->send(Messages::WebProcessProxy::CreateGPUProcessConnection(m_gpuProcessConnection->identifier(),  WTF::move(connectionIdentifiers->client)), 0, IPC::SendOption::DispatchMessageEvenWhenWaitingForSyncReply);
         for (auto& page : m_pageMap.values())
             page->gpuProcessConnectionDidBecomeAvailable(Ref { *m_gpuProcessConnection });
+#if OS(WINDOWS)
+        // Glass: a connection asked for just after the GPU process went can be handed by the UI process to that same
+        // process, before the UI process has heard it's gone. The pipe's other end then stays open in the UI process
+        // (a handle sent is closed by its receiver), so this connection never closes, no new GPU process is started,
+        // and the page waits on it for good (the 1.19.61 double-kill test). One no GPU process has taken 10 s after a
+        // loss is closed like a lost one, and the next update asks for another.
+        if (gpuProcessConnectionWasLost()) {
+            RunLoop::mainSingleton().dispatchAfter(10_s, [weakConnection = ThreadSafeWeakPtr { *m_gpuProcessConnection }] {
+                RefPtr connection = weakConnection.get();
+                if (connection && WebProcess::singleton().existingGPUProcessConnection() == connection.get())
+                    connection->closeIfNotInitialized();
+            });
+        }
+#endif
     }
     return *m_gpuProcessConnection;
 }
@@ -1595,6 +1618,9 @@ void WebProcess::gpuProcessConnectionClosed()
 {
     ASSERT(m_gpuProcessConnection);
     m_gpuProcessConnection = nullptr;
+#if OS(WINDOWS)
+    gpuProcessConnectionWasLost() = true;
+#endif
 
     for (auto& page : m_pageMap.values())
         page->gpuProcessConnectionWasDestroyed();

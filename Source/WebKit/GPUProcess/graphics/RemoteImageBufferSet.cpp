@@ -115,8 +115,8 @@ void RemoteImageBufferSet::endPrepareForDisplay(RenderingUpdateID renderingUpdat
 
     ImageBufferSetPrepareBufferForDisplayOutputData outputData;
     if (frontBuffer) {
-        auto* sharing = frontBuffer->toBackendSharing();
-        outputData.backendHandle = downcast<ImageBufferBackendHandleSharing>(*sharing).createBackendHandle();
+        if (auto* sharing = dynamicDowncast<ImageBufferBackendHandleSharing>(frontBuffer->toBackendSharing()))
+            outputData.backendHandle = sharing->createBackendHandle();
     }
 
     outputData.bufferCacheIdentifiers = BufferIdentifierSet { bufferIdentifier(frontBuffer), bufferIdentifier(m_backBuffer), bufferIdentifier(m_secondaryBackBuffer) };

@@ -89,6 +89,10 @@ void RemoteWCLayerTreeHostProxy::disconnectGpuProcessIfNeeded()
 void RemoteWCLayerTreeHostProxy::gpuProcessConnectionDidClose(GPUProcessConnection& previousConnection)
 {
     m_gpuProcessConnection = nullptr;
+#if OS(WINDOWS)
+    if (m_gpuProcessDidCloseHandler)
+        m_gpuProcessDidCloseHandler(previousConnection.identifier());
+#endif
 }
 
 uint64_t RemoteWCLayerTreeHostProxy::messageSenderDestinationID() const
