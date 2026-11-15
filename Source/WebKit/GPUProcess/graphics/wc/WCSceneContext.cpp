@@ -79,6 +79,18 @@ void WCSceneContext::swapBuffers()
     m_glContext->swapBuffers();
 }
 
+#if OS(WINDOWS)
+WebCore::IntSize WCSceneContext::surfaceSize() const
+{
+    EGLint width = 0, height = 0;
+    EGLDisplay display = eglGetCurrentDisplay();
+    EGLSurface surface = eglGetCurrentSurface(EGL_DRAW);
+    if (surface == EGL_NO_SURFACE || !eglQuerySurface(display, surface, EGL_WIDTH, &width) || !eglQuerySurface(display, surface, EGL_HEIGHT, &height))
+        return { };
+    return { width, height };
+}
+#endif
+
 } // namespace WebKit
 
 #endif // USE(GRAPHICS_LAYER_WC)

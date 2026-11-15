@@ -27,6 +27,7 @@
 
 #if USE(GRAPHICS_LAYER_WC)
 
+#include <WebCore/IntSize.h>
 #include <wtf/TZoneMalloc.h>
 
 namespace WebCore {
@@ -45,6 +46,10 @@ public:
     bool makeContextCurrent();
     std::unique_ptr<WebCore::TextureMapper> createTextureMapper();
     void swapBuffers();
+#if OS(WINDOWS)
+    // The size of the window surface's buffers (ANGLE resizes them to the window when presenting).
+    WebCore::IntSize surfaceSize() const;
+#endif
 
 private:
     const std::unique_ptr<WebCore::GLContext> m_glContext;
