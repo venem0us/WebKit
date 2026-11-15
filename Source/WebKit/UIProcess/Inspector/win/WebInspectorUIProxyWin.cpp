@@ -407,6 +407,21 @@ void WebInspectorUIProxy::platformDetach()
             CW_USEDEFAULT, CW_USEDEFAULT, initialWindowWidth, initialWindowHeight,
             0, 0, instanceHandle(), 0);
         ::SetProp(m_inspectorDetachWindow, WebInspectorUIProxyPointerProp, reinterpret_cast<HANDLE>(this));
+
+        // Open on the inspected window's monitor (CW_USEDEFAULT means the primary one), centred on that window and
+        // sized for the monitor's scale, kept inside the monitor's work area.
+        HWND inspectedRoot = ::GetAncestor(m_inspectedViewWindow, GA_ROOT);
+        RECT inspectedRect;
+        MONITORINFO monitor { sizeof(MONITORINFO) };
+        if (inspectedRoot && ::GetWindowRect(inspectedRoot, &inspectedRect) && ::GetMonitorInfo(::MonitorFromWindow(inspectedRoot, MONITOR_DEFAULTTONEAREST), &monitor)) {
+            UINT dpi = ::GetDpiForWindow(inspectedRoot);
+            const RECT& work = monitor.rcWork;
+            int width = std::min<int>(::MulDiv(initialWindowWidth, dpi, 96), work.right - work.left);
+            int height = std::min<int>(::MulDiv(initialWindowHeight, dpi, 96), work.bottom - work.top);
+            int x = std::clamp<int>((inspectedRect.left + inspectedRect.right - width) / 2, work.left, work.right - width);
+            int y = std::clamp<int>((inspectedRect.top + inspectedRect.bottom - height) / 2, work.top, work.bottom - height);
+            ::SetWindowPos(m_inspectorDetachWindow, nullptr, x, y, width, height, SWP_NOZORDER | SWP_NOACTIVATE);
+        }
     }
 
     WebCore::WindowMessageBroadcaster::removeListener(m_inspectedViewWindow, this);
@@ -463,7 +478,12 @@ void WebInspectorUIProxy::platformResetState()
 
 void WebInspectorUIProxy::platformBringToFront()
 {
-    notImplemented();
+    // Asked for again (Inspect Element, or the embedder's show) while open: a detached inspector comes forward.
+    if (!m_inspectorDetachWindow || !::IsWindowVisible(m_inspectorDetachWindow))
+        return;
+    if (::IsIconic(m_inspectorDetachWindow))
+        ::ShowWindow(m_inspectorDetachWindow, SW_RESTORE);
+    ::SetForegroundWindow(m_inspectorDetachWindow);
 }
 
 void WebInspectorUIProxy::platformBringInspectedPageToFront()
