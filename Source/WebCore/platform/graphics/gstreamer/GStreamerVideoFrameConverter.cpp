@@ -107,10 +107,14 @@ private:
     GstVideoInfo m_outputInfo WTF_GUARDED_BY_LOCK(m_lock);
 };
 
-static bool isSystemMemory(GstCaps* caps)
+// Frames the direct converter can read: system memory, and Direct3D 11 textures (the video sink's frames since
+// zero-copy video), which map for reading through a staging copy. The converter pipeline below only takes system
+// memory, so D3D11 frames failed there (not-negotiated) and canvas drawImage(), WebGL uploads and the like got nothing.
+static bool isCPUReadable(GstCaps* caps)
 {
     auto* features = gst_caps_get_features(caps, 0);
-    return !features || gst_caps_features_is_any(features) || gst_caps_features_contains(features, GST_CAPS_FEATURE_MEMORY_SYSTEM_MEMORY);
+    return !features || gst_caps_features_is_any(features) || gst_caps_features_contains(features, GST_CAPS_FEATURE_MEMORY_SYSTEM_MEMORY)
+        || gst_caps_features_contains(features, "memory:D3D11Memory");
 }
 #endif
 
@@ -276,7 +280,7 @@ GRefPtr<GstSample> GStreamerVideoFrameConverter::convert(const GRefPtr<GstSample
 
 #if OS(WINDOWS)
     GStreamerVideoStats::ScopedTimer timer(GStreamerVideoStats::counters().convert);
-    GRefPtr<GstSample> outputSample = isSystemMemory(inputCaps) ? DirectVideoFrameConverter::singleton().convert(sample.get(), destinationCaps.get()) : nullptr;
+    GRefPtr<GstSample> outputSample = isCPUReadable(inputCaps) ? DirectVideoFrameConverter::singleton().convert(sample.get(), destinationCaps.get()) : nullptr;
     if (!outputSample)
         outputSample = ensurePipeline(inputCaps).run(sample, destinationCaps.get());
 #else
