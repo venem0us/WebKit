@@ -85,6 +85,10 @@ WEBCORE_EXPORT void releaseThreadResources();
 // until then accelerated image buffers stay in software on Windows, as they always have.
 bool skiaGPUContextsEnabled();
 
+// Has Direct3D destroy the textures released so far (it waits for the next flush), with a context of ANGLE's display
+// current: after deleting a batch of them with nothing drawn next.
+WEBCORE_EXPORT void flushReleasedTextures();
+
 // Why Direct3D removed the current EGL context's device (a driver reset or update, the GPU hung, disabled or gone), or
 // S_OK while it's usable. Everything made on a removed device is lost; only a new device can draw again.
 WEBCORE_EXPORT long currentDeviceRemovedReason();
@@ -108,6 +112,11 @@ struct MemoryUse {
     uint64_t images { 0 };
     uint64_t pooledBytes { 0 };
     uint64_t skiaCacheBytes { 0 };
+    // Since the last call: Direct3D flushes after textures were released (drawing and compositor threads, the watch
+    // thread) and driver trims (see flushReleasedTextures).
+    uint64_t releaseFlushes { 0 };
+    uint64_t watchFlushes { 0 };
+    uint64_t trims { 0 };
 };
 WEBCORE_EXPORT MemoryUse takeMemoryUse();
 

@@ -343,7 +343,7 @@ void WCScene::dropUnusedGPUBufferTextures(MonotonicTime now)
     m_lastGPUBufferTextureSweep = now;
     // Past 256 (more tiles than any screen shows), start again.
     bool tooMany = m_gpuBufferTextures.size() > 256;
-    m_gpuBufferTextures.removeIf([&](auto& entry) {
+    bool dropped = m_gpuBufferTextures.removeIf([&](auto& entry) {
         auto& cached = *entry.value;
         if (now - cached.lastUsed < 5_s && !tooMany)
             return false;
@@ -352,6 +352,8 @@ void WCScene::dropUnusedGPUBufferTextures(MonotonicTime now)
             destroyImage(cached.display, cached.image);
         return true;
     });
+    if (dropped)
+        WebCore::D3D11SharedTextures::flushReleasedTextures();
 }
 #endif
 

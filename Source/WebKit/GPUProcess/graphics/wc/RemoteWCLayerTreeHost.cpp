@@ -39,6 +39,7 @@
 #include <WebCore/ProcessIdentifier.h>
 #include <wtf/TZoneMallocInlines.h>
 #if OS(WINDOWS)
+#include <WebCore/D3D11SharedTexture.h>
 #include <windows.h>
 #endif
 
@@ -94,6 +95,11 @@ RemoteWCLayerTreeHost::~RemoteWCLayerTreeHost()
     remoteGraphicsStreamWorkQueue().dispatch([sceneContextHolder = WTF::move(sceneContextHolder), scene = WTF::move(m_scene)]() mutable {
         // Destroy scene on the StreamWorkQueue thread.
         scene = nullptr;
+#if OS(WINDOWS)
+        // Its layers' textures and its cache of drawing threads' textures were deleted with its context current; nothing
+        // may be drawn after them for a long time (the page's process ended, the window shows a page that isn't composited).
+        WebCore::D3D11SharedTextures::flushReleasedTextures();
+#endif
         // sceneContextHolder can be destroyed on the StreamWorkQueue thread because it hasOneRef.
     });
 }
