@@ -32,7 +32,12 @@
 
 #if ENABLE(WEB_AUTHN)
 
+#if PLATFORM(COCOA)
 #include "CommonCryptoDERUtilities.h"
+#else
+// Glass: plain C++ DER helpers, kept with Apple's crypto code (crypto/cocoa isn't on other ports' include path).
+#include "../../../crypto/cocoa/CommonCryptoDERUtilities.h"
+#endif
 #include "FidoConstants.h"
 #include "WebAuthenticationConstants.h"
 #include "WebAuthenticationUtils.h"

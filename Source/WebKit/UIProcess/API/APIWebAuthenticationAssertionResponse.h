@@ -25,7 +25,7 @@
 
 #pragma once
 
-#if ENABLE(WEB_AUTHN)
+#if ENABLE(WEB_AUTHN) && !PLATFORM(WIN) // Glass: Windows uses webauthn.dll (win/WebAuthenticatorCoordinatorProxyWin.cpp)
 
 #include "APIObject.h"
 #include <WebCore/AuthenticatorAssertionResponse.h>
@@ -47,7 +47,9 @@ public:
     RefPtr<Data> credentialID() const;
     const WTF::String& accessGroup() const LIFETIME_BOUND { return m_response->accessGroup(); }
 
+#if PLATFORM(COCOA) // Glass: Apple's keychain context; not on Windows
     void setLAContext(LAContext *context) { m_response->setLAContext(context); }
+#endif
 
     WebCore::AuthenticatorAssertionResponse& response() { return m_response.get(); }
 

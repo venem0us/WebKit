@@ -27,7 +27,9 @@
 
 #if ENABLE(WEB_AUTHN)
 
+#if !PLATFORM(WIN)
 #include "APIWebAuthenticationPanel.h"
+#endif
 #include "FrameInfoData.h"
 #include "WebAuthenticationFlags.h"
 #include "WebPageProxy.h"
@@ -54,12 +56,22 @@ struct WebAuthenticationRequestData {
     // FIXME<rdar://problem/71509848>: Remove the following deprecated fields.
     WeakPtr<WebPageProxy> page;
     WebAuthenticationPanelResult panelResult { WebAuthenticationPanelResult::Unavailable };
+#if PLATFORM(WIN)
+    // Glass: no testing panel on Windows (webauthn.dll shows Windows' own dialogs); placeholders keep the
+    // initializers shared with other platforms unchanged.
+    std::nullptr_t panel { nullptr };
+#else
     RefPtr<API::WebAuthenticationPanel> panel;
+#endif
     std::optional<WebCore::GlobalFrameIdentifier> globalFrameID;
     std::optional<WebKit::FrameInfoData> frameInfo;
 
     String cachedPin; // Only used to improve NFC Client PIN experience.
+#if PLATFORM(WIN)
+    std::nullptr_t weakPanel { nullptr };
+#else
     WeakPtr<API::WebAuthenticationPanel> weakPanel;
+#endif
     std::optional<WebCore::MediationRequirement> mediation;
     std::optional<WebCore::SecurityOriginData> parentOrigin;
 

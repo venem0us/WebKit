@@ -52,7 +52,7 @@ public:
     };
 
     // Create a APDU response from the serialized message.
-    WEBCORE_EXPORT static std::optional<ApduResponse> createFromMessage(Vector<uint8_t>&& data);
+    static std::optional<ApduResponse> createFromMessage(Vector<uint8_t>&& data); // exported with the class
 
     ApduResponse(Vector<uint8_t>&& data, Status);
     ApduResponse(ApduResponse&& that) = default;

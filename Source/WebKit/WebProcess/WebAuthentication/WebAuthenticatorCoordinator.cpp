@@ -28,7 +28,9 @@
 
 #if ENABLE(WEB_AUTHN)
 
+#if PLATFORM(COCOA) // Glass: Apple's browser checks (unused here); not on Windows
 #include "DefaultWebBrowserChecks.h"
+#endif
 #include "FrameInfoData.h"
 #include "MessageSenderInlines.h"
 #include "WebAuthenticatorCoordinatorProxyMessages.h"
