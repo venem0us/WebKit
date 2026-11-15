@@ -35,6 +35,7 @@
 #include "pas_large_free.h"
 #include "pas_large_free_heap_config.h"
 #include "pas_log.h"
+#include "pas_page_malloc.h"
 #include "pas_zero_memory.h"
 #include <stdio.h>
 
@@ -394,11 +395,25 @@ static pas_allocation_result try_allocate_without_fixing(pas_simple_large_free_h
                                                          pas_large_free_heap_config* config)
 {
     pas_generic_large_free_heap_config generic_heap_config;
+    pas_allocation_result result;
     initialize_generic_heap_config(&generic_heap_config);
-    return pas_generic_large_free_heap_try_allocate(
+    result = pas_generic_large_free_heap_try_allocate(
         (pas_generic_large_free_heap*)heap,
         size, alignment, config,
         &generic_heap_config);
+#if PAS_BOOTSTRAP_FREE_HEAP_COMMITS_LAZILY
+    /* Glass: the bootstrap free heap's free memory may be only reserved (see pas_bootstrap_free_heap.c), so commit
+       the pages this allocation covers. Committing pages that are already committed leaves them as they are. */
+    if (heap == &pas_bootstrap_free_heap && result.did_succeed && size) {
+        uintptr_t begin;
+        uintptr_t end;
+        begin = pas_round_down_to_power_of_2(result.begin, pas_page_malloc_alignment());
+        end = pas_round_up_to_power_of_2(result.begin + size, pas_page_malloc_alignment());
+        pas_page_malloc_commit_without_mprotect(
+            (void*)begin, end - begin, /* is_symmetric */ true, pas_memory_flavor_plain);
+    }
+#endif
+    return result;
 }
 
 static void fix_free_list_if_necessary(pas_simple_large_free_heap* heap,
