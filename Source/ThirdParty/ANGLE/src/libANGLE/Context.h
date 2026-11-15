@@ -1214,6 +1214,12 @@ extern thread_local Context *gCurrentValidContext;
 
 extern void SetCurrentValidContext(Context *context);
 
+// Glass: how many times a context has been made current (Context::makeCurrent, which resets the backend's shared
+// state, e.g. StateManager11::onMakeCurrent), including ANGLE's own internal switches (Display::destroyContext).
+// The every-call context check (global_state.h) re-syncs a context when this changed, not only when another context
+// ran in between.
+uint64_t GetMakeCurrentCount();
+
 }  // namespace gl
 
 #endif  // LIBANGLE_CONTEXT_H_

@@ -136,6 +136,21 @@ void SetGlobalLastContext(gl::Context *context)
     g_LastContext = context;
 }
 
+namespace
+{
+uint64_t g_LastMakeCurrentCount = 0;
+}
+
+uint64_t GetGlobalLastMakeCurrentCount()
+{
+    return g_LastMakeCurrentCount;
+}
+
+void SetGlobalLastMakeCurrentCount(uint64_t count)
+{
+    g_LastMakeCurrentCount = count;
+}
+
 // This function causes an MSAN false positive, which is muted. See https://crbug.com/1211047
 // It also causes a flaky false positive in TSAN. http://crbug.com/1223970
 ANGLE_NO_SANITIZE_MEMORY ANGLE_NO_SANITIZE_THREAD Thread *GetCurrentThread()
