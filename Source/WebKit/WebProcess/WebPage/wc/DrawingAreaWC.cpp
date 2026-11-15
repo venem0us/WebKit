@@ -123,7 +123,15 @@ void DrawingAreaWC::updatePreferences(const WebPreferencesStore& store)
 {
     Settings& settings = m_webPage->corePage()->settings();
     settings.setAcceleratedCompositingForFixedPositionEnabled(settings.acceleratedCompositingEnabled());
-    settings.setForceCompositingMode(store.getBoolValueForKey(WebPreferencesKey::siteIsolationEnabledKey()));
+    // Glass: GLASS_FORCE_COMPOSITING=1 composites every page while accelerated compositing is on, as Chrome does,
+    // instead of only pages that need layers (a page without them is painted as one bitmap for the UI process). Off by
+    // default: it cost MotionMark about 5% (a layer-tree flush on every frame) with nothing drawn on the GPU yet.
+    static const bool forceCompositing = [] {
+        const char* force = getenv("GLASS_FORCE_COMPOSITING");
+        return force && !strcmp(force, "1");
+    }();
+    settings.setForceCompositingMode(store.getBoolValueForKey(WebPreferencesKey::siteIsolationEnabledKey())
+        || (forceCompositing && settings.acceleratedCompositingEnabled()));
 }
 
 bool DrawingAreaWC::shouldUseTiledBackingForFrameView(const WebCore::LocalFrameView& frameView) const
