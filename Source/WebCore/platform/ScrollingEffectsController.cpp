@@ -465,7 +465,10 @@ bool ScrollingEffectsController::handleWheelEvent(const PlatformWheelEvent& whee
     if (!deltaX && !deltaY)
         return false;
 
-#if ENABLE(SMOOTH_SCROLLING)
+// Glass: also on Windows, where ENABLE_SMOOTH_SCROLLING is off: with the scroll animator on (Settings > Accessibility >
+// Smooth scrolling) keyboard scrolling glided but a mouse wheel notch still jumped in one frame. Windows' wheel events
+// (WebEventFactory) have no gesture phase, so this is every notch.
+#if ENABLE(SMOOTH_SCROLLING) || PLATFORM(WIN)
     if (m_client.scrollAnimationEnabled() && !m_inScrollGesture) {
         if (!retargetAnimatedScrollBy({ deltaX, deltaY }))
             startAnimatedScrollToDestination(scrollOffset, scrollOffset + FloatSize { deltaX, deltaY });
