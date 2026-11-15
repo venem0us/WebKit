@@ -24,10 +24,14 @@
 
 #include "GRefPtrGStreamer.h"
 #include "GStreamerCommon.h"
+#if !OS(WINDOWS)
 #include <gio/gunixfdlist.h>
+#endif
 #include <gst/video/video-format.h>
 #include <optional>
+#if !OS(WINDOWS)
 #include <unistd.h>
+#endif
 #include <wtf/Scope.h>
 #include <wtf/UUID.h>
 #include <wtf/WeakRandomNumber.h>
@@ -189,6 +193,10 @@ void DesktopPortalCamera::accessCamera(Function<void(std::optional<int>)>&& call
 
 std::optional<int> DesktopPortalCamera::openCameraPipewireRemote()
 {
+#if OS(WINDOWS)
+    // Glass M0: there is no desktop portal or PipeWire on Windows.
+    return { };
+#else
     GRefPtr<GUnixFDList> fdList;
     int fd = -1;
     GVariantBuilder options;
@@ -209,6 +217,7 @@ std::optional<int> DesktopPortalCamera::openCameraPipewireRemote()
         return { };
     }
     return fd;
+#endif
 }
 
 std::optional<DesktopPortalScreenCast::ScreencastSession> DesktopPortalScreenCast::createScreencastSession()
@@ -290,6 +299,10 @@ GRefPtr<GVariant> DesktopPortalScreenCast::ScreencastSession::start()
 
 std::optional<PipeWireNodeData> DesktopPortalScreenCast::ScreencastSession::openPipewireRemote()
 {
+#if OS(WINDOWS)
+    // Glass M0: there is no desktop portal or PipeWire on Windows.
+    return { };
+#else
     GRefPtr<GUnixFDList> fdList;
     GVariantBuilder options;
     g_variant_builder_init(&options, G_VARIANT_TYPE_VARDICT);
@@ -321,6 +334,7 @@ std::optional<PipeWireNodeData> DesktopPortalScreenCast::ScreencastSession::open
     gst_caps_set_simple(nodeData.caps.get(), "format", G_TYPE_STRING, "DMA_DRM", "drm-format", G_TYPE_STRING, drmFormat.utf8(), nullptr);
 #endif
     return nodeData;
+#endif // OS(WINDOWS)
 }
 
 } // namespace WebCore

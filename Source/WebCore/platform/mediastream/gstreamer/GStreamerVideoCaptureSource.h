@@ -57,6 +57,7 @@ public:
     void sourceCapsChanged(const GstCaps*) final;
     void captureEnded() final;
     void captureDeviceUpdated(const GStreamerCaptureDevice&) final;
+    void capturePipelineFailed() final;
 
     std::pair<GstClockTime, GstClockTime> queryCaptureLatency() const final;
 

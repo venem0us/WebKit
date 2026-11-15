@@ -25,7 +25,14 @@
 
 #pragma once
 
+#include <wtf/Platform.h>
+#if OS(WINDOWS)
+// Glass M0: the helpers below only need the socket address types.
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
 #include <sys/socket.h>
+#endif
 #include <wtf/Compiler.h>
 #include <wtf/Function.h>
 #include <wtf/TypeCasts.h>

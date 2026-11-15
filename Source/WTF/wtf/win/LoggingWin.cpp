@@ -37,7 +37,9 @@ namespace WTF {
 
 String logLevelString()
 {
-#if !LOG_DISABLED
+    // Glass: read WTFLogging in release builds too, so RELEASE_LOG channels (e.g. WTFLogging=WebRTC,Network) can be
+    // switched on for diagnosis. Unset, nothing changes.
+#if !LOG_DISABLED || !RELEASE_LOG_DISABLED
     static constexpr const char* loggingEnvironmentVariable = "WTFLogging";
     DWORD length = GetEnvironmentVariableA(loggingEnvironmentVariable, 0, 0);
     if (!length)

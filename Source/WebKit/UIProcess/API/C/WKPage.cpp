@@ -3113,6 +3113,12 @@ void WKPageSetMediaCaptureEnabled(WKPageRef pageRef, bool enabled)
     protect(toImpl(pageRef))->setMediaCaptureEnabled(enabled);
 }
 
+void WKPageStopMediaCapture(WKPageRef pageRef)
+{
+    CRASH_IF_SUSPENDED;
+    protect(toImpl(pageRef))->stopMediaCapture(WebCore::MediaProducerMediaCaptureKind::EveryKind);
+}
+
 bool WKPageGetMediaCaptureEnabled(WKPageRef page)
 {
     return toImpl(page)->mediaCaptureEnabled();

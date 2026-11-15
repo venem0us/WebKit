@@ -134,7 +134,7 @@ void NetworkRTCSharedMonitor::onGatheredNetworks(RTCNetwork::IPAddress&& ipv4, R
         for (auto& network : m_networkMap.values())
             network.id = ++m_networkLastIndex;
     } else {
-        bool didChange = networkMap.size() != networkMap.size();
+        bool didChange = networkMap.size() != m_networkMap.size();
         for (auto& keyValue : networkMap) {
             auto iterator = m_networkMap.find(keyValue.key);
             bool isFound = iterator != m_networkMap.end();
@@ -166,6 +166,10 @@ void NetworkRTCSharedMonitor::onGatheredNetworks(RTCNetwork::IPAddress&& ipv4, R
     int preference = std::max(127zu, networkList.size());
     for (auto& network : networkList)
         network.preference = preference--;
+
+    // Glass M4b: keep the list; it was computed but never stored, so every listener got an empty one (no ICE
+    // candidates at all).
+    m_networkList = WTF::move(networkList);
 
     m_observers.forEach([this](auto& observer) {
         Ref { observer }->onNetworksChanged(m_networkList, m_ipv4, m_ipv6);

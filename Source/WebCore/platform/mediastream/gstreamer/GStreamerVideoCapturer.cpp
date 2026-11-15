@@ -139,7 +139,15 @@ GstElement* GStreamerVideoCapturer::createConverter()
 
     // The workaround below doesn't seem necessary anymore in GStreamer 1.28 and beyond.
     // Fixed by: https://gitlab.freedesktop.org/gstreamer/gstreamer/-/commit/6f623af4d745efaacd0c8639b99536def4a65c78
+    // Glass M4d: on Windows it is still needed. Without drop-only, videorate fills gaps in a real camera's
+    // timestamps (Media Foundation, e.g. Camo) by repeating the last frame: the picture froze on its first frame while
+    // hundreds of identical frames a second went to the page and the encoder. A camera only needs frames dropped,
+    // never invented.
+#if OS(WINDOWS)
+    if (true) {
+#else
     if (!gst_check_version(1, 28, 0)) {
+#endif
         // https://gitlab.freedesktop.org/gstreamer/gst-plugins-base/issues/97#note_56575
         g_object_set(videorate, "drop-only", TRUE, "average-period", UINT64_C(1), nullptr);
     }
