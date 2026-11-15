@@ -699,6 +699,7 @@ private:
     RefPtr<MediaPlayerCompositorFrameSink> m_compositorFrameSink WTF_GUARDED_BY_LOCK(m_compositorFrameSinkLock);
     std::atomic<bool> m_framesGoToCompositor { false }; // the last frame went through the sink: repaint() skips the element repaint
     std::atomic<bool> m_pageIsVisibleForSink { false };
+    bool m_usesD3D11VideoSink { false }; // the video sink is the Direct3D 11 bin (see createD3D11VideoSinkBin())
 #endif
     mutable PlatformTimeRanges m_buffered;
 #if !RELEASE_LOG_DISABLED

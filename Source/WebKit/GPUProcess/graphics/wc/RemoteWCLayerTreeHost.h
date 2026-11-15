@@ -40,6 +40,10 @@
 #include <wtf/Lock.h>
 #include <wtf/RefCounted.h>
 #include <wtf/ThreadSafeRefCounted.h>
+#include <wtf/Vector.h>
+#if OS(WINDOWS)
+#include <wtf/win/Win32Handle.h>
+#endif
 #include <wtf/TZoneMalloc.h>
 
 namespace IPC {
@@ -61,6 +65,8 @@ public:
     void update(WCUpdateInfo&&, CompletionHandler<void(std::optional<WebKit::UpdateInfo>)>&&);
 #if OS(WINDOWS)
     void updateVideoFrame(WebCore::PlatformLayerIdentifier, WCBackingStore&&);
+    void importVideoTexture(WebCore::PlatformLayerIdentifier, uint64_t texture, WebCore::IntSize, WTF::Win32Handle&&, CompletionHandler<void(bool)>&&);
+    void updateVideoTexture(WebCore::PlatformLayerIdentifier, uint64_t texture);
 #endif
 
     void ref() const final { RefCounted::ref(); }
@@ -83,11 +89,23 @@ private:
 #if OS(WINDOWS)
     // Video frames sent from the web process's video sink threads, latest per layer: the work queue shows the newest
     // and drops any it didn't get to. Shared with the work queue, which outlives a message.
+    // GPU textures (see WCScene::importVideoTexture) work the same way: imports always go first; of a layer's texture
+    // frames only the newest is shown, the others are handed straight back to the web process.
+    struct TextureImport {
+        WebCore::PlatformLayerIdentifier layer;
+        uint64_t texture;
+        WebCore::IntSize size;
+        WTF::Win32Handle handle;
+        CompletionHandler<void(bool)> completionHandler;
+    };
     struct VideoFrameMailbox : ThreadSafeRefCounted<VideoFrameMailbox> {
         Lock lock;
         HashMap<WebCore::PlatformLayerIdentifier, RefPtr<WebCore::ShareableBitmap>> frames WTF_GUARDED_BY_LOCK(lock);
+        Vector<TextureImport> textureImports WTF_GUARDED_BY_LOCK(lock);
+        HashMap<WebCore::PlatformLayerIdentifier, Vector<uint64_t>> textureFrames WTF_GUARDED_BY_LOCK(lock);
         bool drainScheduled WTF_GUARDED_BY_LOCK(lock) { false };
     };
+    void scheduleVideoFrameDrain() WTF_REQUIRES_LOCK(m_videoFrames->lock);
     Ref<VideoFrameMailbox> m_videoFrames { adoptRef(*new VideoFrameMailbox) };
 #endif
 };

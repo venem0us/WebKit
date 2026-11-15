@@ -31,6 +31,8 @@ messages -> RemoteWCLayerTreeHost {
     Update(struct WebKit::WCUpdateInfo updateInfo) -> (std::optional<WebKit::UpdateInfo> updateInfo)
 #if OS(WINDOWS)
     UpdateVideoFrame(WebCore::PlatformLayerIdentifier layer, WebKit::WCBackingStore frame)
+    ImportVideoTexture(WebCore::PlatformLayerIdentifier layer, uint64_t texture, WebCore::IntSize size, Win32Handle handle) -> (bool imported)
+    UpdateVideoTexture(WebCore::PlatformLayerIdentifier layer, uint64_t texture)
 #endif
 }
 

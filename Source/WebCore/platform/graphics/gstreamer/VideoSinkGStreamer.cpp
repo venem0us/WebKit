@@ -48,7 +48,13 @@ using namespace WebCore;
 #define GST_CAPS_FORMAT "{ xRGB, ARGB }"
 #endif
 
+#if OS(WINDOWS)
+// Frames that stay on the GPU (Direct3D 11 textures, from d3d11convert): MediaPlayerPrivateGStreamer hands them to the
+// compositor without copying them to memory. Listed first so they're preferred where the upstream offers them.
+#define WEBKIT_VIDEO_SINK_PAD_CAPS GST_VIDEO_CAPS_MAKE_WITH_FEATURES("memory:D3D11Memory", "BGRA") ";" GST_VIDEO_CAPS_MAKE_WITH_FEATURES(GST_CAPS_FEATURE_META_GST_VIDEO_GL_TEXTURE_UPLOAD_META, GST_CAPS_FORMAT) ";" GST_VIDEO_CAPS_MAKE(GST_CAPS_FORMAT)
+#else
 #define WEBKIT_VIDEO_SINK_PAD_CAPS GST_VIDEO_CAPS_MAKE_WITH_FEATURES(GST_CAPS_FEATURE_META_GST_VIDEO_GL_TEXTURE_UPLOAD_META, GST_CAPS_FORMAT) ";" GST_VIDEO_CAPS_MAKE(GST_CAPS_FORMAT)
+#endif
 
 static GstStaticPadTemplate s_videoSinkTemplate = GST_STATIC_PAD_TEMPLATE("sink", GST_PAD_SINK, GST_PAD_ALWAYS, GST_STATIC_CAPS(WEBKIT_VIDEO_SINK_PAD_CAPS));
 

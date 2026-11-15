@@ -34,6 +34,9 @@
 #include "WCLayerTreeHostIdentifier.h"
 #include <WebCore/MediaPlayerCompositorFrameSink.h>
 #include <WebCore/PlatformLayerIdentifier.h>
+#if OS(WINDOWS)
+#include <wtf/win/Win32Handle.h>
+#endif
 #include <wtf/TZoneMalloc.h>
 #include <wtf/WeakRef.h>
 
