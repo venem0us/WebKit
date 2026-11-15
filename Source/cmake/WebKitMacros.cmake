@@ -1032,8 +1032,17 @@ function(WEBKIT_SYMLINK_FILES target_name)
             file(MAKE_DIRECTORY ${opt_DESTINATION}/${file_dir})
             set(dst_file ${opt_DESTINATION}/${file})
         endif ()
+        if (WIN32 AND src_file MATCHES "\\.(h|hh|hpp|hxx|inc|inl)$")
+            set(link_command ${CMAKE_COMMAND} -DSOURCE_HEADER=${src_file}
+                -DDESTINATION_HEADER=${dst_file}
+                -P ${CMAKE_SOURCE_DIR}/Source/cmake/ForwardHeaderWin.cmake)
+        elseif (WIN32)
+            set(link_command ${CMAKE_COMMAND} -E copy_if_different ${src_file} ${dst_file})
+        else ()
+            set(link_command ${CMAKE_COMMAND} -E create_symlink ${src_file} ${dst_file})
+        endif ()
         add_custom_command(OUTPUT ${dst_file}
-            COMMAND ${CMAKE_COMMAND} -E create_symlink ${src_file} ${dst_file}
+            COMMAND ${link_command}
             MAIN_DEPENDENCY ${src_file}
             VERBATIM
         )
