@@ -99,6 +99,11 @@ public:
         m_tileGrid.setSize(expandedIntSize(size));
     }
 
+    void discardTiles()
+    {
+        m_tileGrid.setSize(expandedIntSize(m_owner.size()));
+    }
+
     void setDirtyRect(const WebCore::FloatRect& rect)
     {
         m_tileGrid.addDirtyRect(enclosingIntRect(rect));
@@ -671,8 +676,13 @@ void GraphicsLayerWC::flushCompositingStateForThisLayerOnly()
                 incrementRepaintCount();
                 update.changes.add(WCLayerChange::RepaintCount);
             }
-        } else
+        } else {
             update.background.hasBackingStore = false;
+            // Glass: the GPU process drops the layer's tiles when told it has no backing store; drop ours too, so that
+            // when it has one again every tile is new and painted whole. Kept, they sent only what had changed since,
+            // and the rest of each tile stayed empty there (blank strips after returning to a tab).
+            m_tiledBacking->discardTiles();
+        }
     }
     if (update.changes & WCLayerChange::SolidColor)
         update.solidColor = m_solidColor;
