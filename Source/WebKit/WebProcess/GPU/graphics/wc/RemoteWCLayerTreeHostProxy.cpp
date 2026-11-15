@@ -92,6 +92,68 @@ void RemoteWCLayerTreeHostProxy::update(WCUpdateInfo&& updateInfo, CompletionHan
     sendWithAsyncReply(Messages::RemoteWCLayerTreeHost::Update(updateInfo), WTF::move(completionHandler));
 }
 
+#if ENABLE(VIDEO) && OS(WINDOWS)
+namespace {
+
+// Copies each frame into shared memory and sends it to the GPU process's scene for this layer tree, on the video
+// player's thread. A frame the GPU process isn't ready for (or a lost connection) is dropped there or fails here, and
+// the player falls back to showing frames through rendering updates.
+class WCVideoFrameSender final : public WebCore::MediaPlayerCompositorFrameSink {
+public:
+    WCVideoFrameSender(Ref<IPC::Connection>&& connection, uint64_t destinationID, WebCore::PlatformLayerIdentifier layer)
+        : m_connection(WTF::move(connection))
+        , m_destinationID(destinationID)
+        , m_layer(layer)
+    {
+    }
+
+    bool pushFrame(std::span<const uint8_t> pixels, const WebCore::IntSize& size, unsigned stride, bool opaque) final
+    {
+        if (size.isEmpty() || stride < static_cast<unsigned>(size.width()) * 4 || pixels.size() < static_cast<size_t>(stride) * size.height())
+            return false;
+        // N32 premultiplied, which is BGRA in memory on Windows: the frame's rows copy straight in.
+        RefPtr bitmap = WebCore::ShareableBitmap::create({ size, WebCore::ColorSpace::SRGB(), WebCore::PixelFormat::BGRA8, WebCore::Headroom::None, opaque });
+        if (!bitmap)
+            return false;
+        auto destination = bitmap->mutableSpan();
+        size_t rowBytes = static_cast<size_t>(size.width()) * 4;
+        size_t destinationStride = bitmap->bytesPerRow();
+        for (int y = 0; y < size.height(); ++y) {
+            auto source = pixels.subspan(static_cast<size_t>(y) * stride, rowBytes);
+            auto row = destination.subspan(static_cast<size_t>(y) * destinationStride, rowBytes);
+            memcpySpan(row, source);
+            if (opaque) {
+                // BGRx: the fourth byte is padding, not alpha.
+                for (size_t x = 3; x < rowBytes; x += 4)
+                    row[x] = 0xff;
+            }
+        }
+        WCBackingStore store;
+        store.setBitmap(WTF::move(bitmap));
+        return m_connection->send(Messages::RemoteWCLayerTreeHost::UpdateVideoFrame(m_layer, store), m_destinationID) == IPC::Error::NoError;
+    }
+
+private:
+    const Ref<IPC::Connection> m_connection;
+    const uint64_t m_destinationID;
+    const WebCore::PlatformLayerIdentifier m_layer;
+};
+
+} // namespace
+
+RefPtr<WebCore::MediaPlayerCompositorFrameSink> RemoteWCLayerTreeHostProxy::createVideoFrameSink(WebCore::PlatformLayerIdentifier layer)
+{
+    // WEBKIT_GST_DIRECT_VIDEO_FRAMES=0: frames go with rendering updates, as before.
+    static const bool disabled = [] {
+        auto* value = std::getenv("WEBKIT_GST_DIRECT_VIDEO_FRAMES");
+        return value && *value == '0';
+    }();
+    if (disabled || m_usesOffscreenRendering)
+        return nullptr;
+    return adoptRef(*new WCVideoFrameSender(Ref { ensureGPUProcessConnection().connection() }, wcLayerTreeHostIdentifier().toUInt64(), layer));
+}
+#endif
+
 } // namespace WebKit
 
 #endif // USE(GRAPHICS_LAYER_WC)

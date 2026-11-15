@@ -2692,6 +2692,7 @@ set(WebCore_PRIVATE_FRAMEWORK_HEADERS
     platform/graphics/MediaPlaybackTargetPicker.h
     platform/graphics/MediaPlayer.h
     platform/graphics/MediaPlayerClientIdentifier.h
+    platform/graphics/MediaPlayerCompositorFrameSink.h
     platform/graphics/MediaPlayerEnums.h
     platform/graphics/MediaPlayerIdentifier.h
     platform/graphics/MediaPlayerPrivate.h

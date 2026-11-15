@@ -29,6 +29,7 @@
 
 #include "WCUpdateInfo.h"
 #include <WebCore/GraphicsLayerContentsDisplayDelegate.h>
+#include <WebCore/MediaPlayerCompositorFrameSink.h>
 #include <wtf/DoublyLinkedList.h>
 
 namespace WebCore {
@@ -45,6 +46,10 @@ public:
         virtual void graphicsLayerRemoved(GraphicsLayerWC&) = 0;
         virtual void commitLayerUpdateInfo(WCLayerUpdateInfo&&) = 0;
         virtual RefPtr<WebCore::ImageBuffer> createImageBuffer(WebCore::FloatSize, float deviceScaleFactor) = 0;
+#if ENABLE(VIDEO) && OS(WINDOWS)
+        // Where a video in this layer can send its frames straight to the compositor, if anywhere.
+        virtual RefPtr<WebCore::MediaPlayerCompositorFrameSink> createVideoFrameSink(WebCore::PlatformLayerIdentifier) { return nullptr; }
+#endif
     };
 
     GraphicsLayerWC(Type layerType, WebCore::GraphicsLayerClient&, Observer&);
@@ -137,6 +142,10 @@ private:
     // A video whose frames this layer hands to the compositor (players without a platform layer).
     RefPtr<WebCore::MediaPlayer> m_mediaPlayer;
     RefPtr<WebCore::NativeImage> m_lastVideoFrame;
+#if OS(WINDOWS)
+    // Set when m_mediaPlayer sends its frames straight to the compositor: rendering updates then carry none.
+    bool m_mediaPlayerHasFrameSink { false };
+#endif
 #endif
     Markable<WebCore::LayerHostingContextIdentifier> m_hostIdentifier;
     WebCore::Color m_solidColor;

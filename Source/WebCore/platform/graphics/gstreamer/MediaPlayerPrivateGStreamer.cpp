@@ -4021,6 +4021,15 @@ void MediaPlayerPrivateGStreamer::repaint()
     }
 #endif
 
+#if OS(WINDOWS)
+    // The frame already went to the compositor from the sink thread: repainting the element would only start a
+    // rendering update for nothing.
+    if (m_framesGoToCompositor) {
+        Locker locker { m_drawLock };
+        m_drawCondition.notifyOne();
+        return;
+    }
+#endif
     if (RefPtr player = m_player.get())
         player->repaint();
 
@@ -4274,6 +4283,19 @@ void MediaPlayerPrivateGStreamer::triggerRepaint(GRefPtr<GstSample>&& sample)
         });
     }
 
+#if OS(WINDOWS)
+    // With a compositor frame sink the frame goes to the compositor from here; the main-thread repaint below still
+    // runs for timing and stats, but no longer has to carry the frame (see repaint()).
+    {
+        GRefPtr<GstSample> latest;
+        {
+            Locker sampleLocker { m_sampleMutex };
+            latest = m_sample;
+        }
+        m_framesGoToCompositor = pushFrameToCompositor(latest.get());
+    }
+#endif
+
     if (!m_canRenderingBeAccelerated) {
         Locker locker { m_drawLock };
         if (m_isBeingDestroyed)
@@ -4438,6 +4460,81 @@ bool MediaPlayerPrivateGStreamer::supportsAcceleratedRendering() const
         return false;
     RefPtr player = m_player.get();
     return player && player->acceleratedCompositingEnabled();
+}
+
+void MediaPlayerPrivateGStreamer::setCompositorFrameSink(RefPtr<MediaPlayerCompositorFrameSink>&& sink)
+{
+    bool hadSink;
+    {
+        Locker locker { m_compositorFrameSinkLock };
+        hadSink = !!m_compositorFrameSink;
+        m_compositorFrameSink = WTF::move(sink);
+        if (!m_compositorFrameSink)
+            m_framesGoToCompositor = false;
+    }
+    // Without a sink the layer shows frames from its rendering updates again: have one pick up the current frame.
+    if (hadSink && !m_framesGoToCompositor) {
+        if (RefPtr player = m_player.get())
+            player->repaint();
+    }
+}
+
+// Called on the sink thread with the newest sample. Sends the frame to the compositor and counts it as presented
+// (requestVideoFrameCallback and the stats), as presentedImage() does for a frame shown by a rendering update.
+bool MediaPlayerPrivateGStreamer::pushFrameToCompositor(GstSample* sample)
+{
+    RefPtr<MediaPlayerCompositorFrameSink> sink;
+    {
+        Locker locker { m_compositorFrameSinkLock };
+        sink = m_compositorFrameSink;
+    }
+    if (!sink || !sample || !m_pageIsVisibleForSink)
+        return false;
+    GstBuffer* buffer = gst_sample_get_buffer(sample);
+    GstVideoInfo info;
+    if (!buffer || !gst_video_info_from_caps(&info, gst_sample_get_caps(sample)))
+        return false;
+    auto format = GST_VIDEO_INFO_FORMAT(&info);
+    if (format != GST_VIDEO_FORMAT_BGRA && format != GST_VIDEO_FORMAT_BGRx)
+        return false;
+
+    bool sent;
+    {
+        std::optional<GStreamerVideoStats::ScopedTimer> sendTimer;
+        if (GStreamerVideoStats::enabled())
+            sendTimer.emplace(GStreamerVideoStats::counters().paint);
+        GstVideoFrame frame;
+        if (!gst_video_frame_map(&frame, &info, buffer, GST_MAP_READ))
+            return false;
+        IntSize size(GST_VIDEO_FRAME_WIDTH(&frame), GST_VIDEO_FRAME_HEIGHT(&frame));
+        unsigned stride = GST_VIDEO_FRAME_PLANE_STRIDE(&frame, 0);
+        auto* data = static_cast<const uint8_t*>(GST_VIDEO_FRAME_PLANE_DATA(&frame, 0));
+        sent = sink->pushFrame(unsafeMakeSpan(data, static_cast<size_t>(stride) * size.height()), size, stride, format == GST_VIDEO_FORMAT_BGRx);
+        gst_video_frame_unmap(&frame);
+    }
+    if (!sent)
+        return false;
+
+    bool isNewFrame;
+    {
+        Locker sampleLocker { m_sampleMutex };
+        isNewFrame = !m_lastPaintedSample || gst_sample_get_buffer(m_lastPaintedSample.get()) != buffer;
+        if (isNewFrame) {
+            m_lastPaintedSample = sample;
+            ++m_sampleCount;
+        }
+    }
+    if (GStreamerVideoStats::enabled()) {
+        auto& stats = GStreamerVideoStats::counters();
+        ++stats.paints;
+        if (isNewFrame) {
+            ++stats.newFramesPainted;
+            GStreamerVideoStats::noteNewFramePainted(GST_BUFFER_PTS(buffer));
+        }
+        if (auto arrival = stats.lastArrivalUs.exchange(0))
+            stats.arrivalToRepaint.add(GStreamerVideoStats::nowMicroseconds() - arrival);
+    }
+    return true;
 }
 
 RefPtr<NativeImage> MediaPlayerPrivateGStreamer::imageForCompositing()

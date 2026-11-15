@@ -42,6 +42,9 @@
 #include "Logging.h"
 #include "MIMETypeRegistry.h"
 #include "MediaPlayerPrivate.h"
+#if OS(WINDOWS)
+#include "MediaPlayerCompositorFrameSink.h"
+#endif
 #include "MediaResourceSniffer.h"
 #include "MediaStrategy.h"
 #include "MessageClientForTesting.h"
@@ -1383,6 +1386,14 @@ bool MediaPlayer::supportsAcceleratedRendering() const
 {
     return protect(m_private)->supportsAcceleratedRendering();
 }
+
+#if OS(WINDOWS)
+void setCompositorFrameSink(MediaPlayer& player, RefPtr<MediaPlayerCompositorFrameSink>&& sink)
+{
+    if (auto* playerPrivate = player.playerPrivate())
+        playerPrivate->setCompositorFrameSink(WTF::move(sink));
+}
+#endif
 
 void MediaPlayer::setShouldMaintainAspectRatio(bool maintainAspectRatio)
 {

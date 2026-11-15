@@ -46,6 +46,9 @@ namespace WebCore {
 
 class MessageClientForTesting;
 class VideoFrame;
+#if OS(WINDOWS)
+class MediaPlayerCompositorFrameSink;
+#endif
 
 enum class MediaPlaybackTargetType : uint8_t;
 
@@ -243,6 +246,10 @@ public:
 
     // whether accelerated rendering is supported by the media engine for the current media.
     virtual bool supportsAcceleratedRendering() const { return false; }
+#if OS(WINDOWS)
+    // See MediaPlayerCompositorFrameSink.h.
+    virtual void setCompositorFrameSink(RefPtr<MediaPlayerCompositorFrameSink>&&) { }
+#endif
     // called when the rendering system flips the into or out of accelerated rendering mode.
     virtual void acceleratedRenderingStateChanged() { }
 

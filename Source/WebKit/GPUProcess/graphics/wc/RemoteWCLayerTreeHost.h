@@ -30,10 +30,16 @@
 #include "Connection.h"
 #include "MessageReceiver.h"
 #include "MessageSender.h"
+#include "WCBackingStore.h"
 #include "WCLayerTreeHostIdentifier.h"
 #include "WCSharedSceneContextHolder.h"
+#include <WebCore/PlatformLayerIdentifier.h>
 #include <WebCore/ProcessIdentifier.h>
+#include <WebCore/ShareableBitmap.h>
+#include <wtf/HashMap.h>
+#include <wtf/Lock.h>
 #include <wtf/RefCounted.h>
+#include <wtf/ThreadSafeRefCounted.h>
 #include <wtf/TZoneMalloc.h>
 
 namespace IPC {
@@ -53,6 +59,9 @@ public:
     ~RemoteWCLayerTreeHost();
     // message handlers
     void update(WCUpdateInfo&&, CompletionHandler<void(std::optional<WebKit::UpdateInfo>)>&&);
+#if OS(WINDOWS)
+    void updateVideoFrame(WebCore::PlatformLayerIdentifier, WCBackingStore&&);
+#endif
 
     void ref() const final { RefCounted::ref(); }
     void deref() const final { RefCounted::deref(); }
@@ -71,6 +80,16 @@ private:
     WCLayerTreeHostIdentifier m_identifier;
     RefPtr<WCSharedSceneContextHolder::Holder> m_sharedSceneContextHolder;
     std::unique_ptr<WCScene> m_scene;
+#if OS(WINDOWS)
+    // Video frames sent from the web process's video sink threads, latest per layer: the work queue shows the newest
+    // and drops any it didn't get to. Shared with the work queue, which outlives a message.
+    struct VideoFrameMailbox : ThreadSafeRefCounted<VideoFrameMailbox> {
+        Lock lock;
+        HashMap<WebCore::PlatformLayerIdentifier, RefPtr<WebCore::ShareableBitmap>> frames WTF_GUARDED_BY_LOCK(lock);
+        bool drainScheduled WTF_GUARDED_BY_LOCK(lock) { false };
+    };
+    Ref<VideoFrameMailbox> m_videoFrames { adoptRef(*new VideoFrameMailbox) };
+#endif
 };
 
 IPC::StreamConnectionWorkQueue& remoteGraphicsStreamWorkQueue();

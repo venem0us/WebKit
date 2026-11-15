@@ -182,6 +182,10 @@ GraphicsLayerWC::GraphicsLayerWC(Type layerType, GraphicsLayerClient& client, Ob
 
 GraphicsLayerWC::~GraphicsLayerWC()
 {
+#if ENABLE(VIDEO) && OS(WINDOWS)
+    if (m_mediaPlayer && m_mediaPlayerHasFrameSink)
+        WebCore::setCompositorFrameSink(*m_mediaPlayer, nullptr);
+#endif
     willBeDestroyed();
     if (m_observer)
         m_observer->graphicsLayerRemoved(*this);
@@ -473,8 +477,22 @@ void GraphicsLayerWC::setContentsToMediaPlayer(MediaPlayer* player, ContentsLaye
     RefPtr<MediaPlayer> mediaPlayer = player && player->supportsAcceleratedRendering() ? player : nullptr;
     if (m_mediaPlayer == mediaPlayer)
         return;
+#if OS(WINDOWS)
+    if (m_mediaPlayer && m_mediaPlayerHasFrameSink)
+        WebCore::setCompositorFrameSink(*m_mediaPlayer, nullptr);
+    m_mediaPlayerHasFrameSink = false;
+#endif
     m_mediaPlayer = WTF::move(mediaPlayer);
     m_lastVideoFrame = nullptr;
+#if OS(WINDOWS)
+    // Frames then go from the player's thread straight to the compositor, not with rendering updates.
+    if (m_mediaPlayer && m_observer) {
+        if (RefPtr sink = m_observer->createVideoFrameSink(m_layerID)) {
+            WebCore::setCompositorFrameSink(*m_mediaPlayer, WTF::move(sink));
+            m_mediaPlayerHasFrameSink = true;
+        }
+    }
+#endif
     noteLayerPropertyChanged(WCLayerChange::PlatformLayer);
 }
 #endif
@@ -689,8 +707,13 @@ void GraphicsLayerWC::flushCompositingStateForThisLayerOnly()
 #if ENABLE(VIDEO)
         if (m_mediaPlayer) {
             update.platformLayer.hasLayer = true;
-            // Send the frame only when it changed; the compositor keeps showing the last one it received.
+            // Send the frame only when it changed; the compositor keeps showing the last one it received. (Not at all
+            // when the player sends its frames to the compositor itself.)
+#if OS(WINDOWS)
+            RefPtr frame = m_mediaPlayerHasFrameSink ? nullptr : m_mediaPlayer->imageForCompositing();
+#else
             RefPtr frame = m_mediaPlayer->imageForCompositing();
+#endif
             if (frame && frame != m_lastVideoFrame) {
                 if (RefPtr bitmap = ShareableBitmap::createFromImageDraw(*frame, frame->colorSpace())) {
                     WCBackingStore store;

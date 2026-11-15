@@ -36,6 +36,7 @@
 #include <wtf/TZoneMalloc.h>
 
 namespace WebCore {
+class ShareableBitmap;
 class TextureMapper;
 class TextureMapperLayer;
 class TextureMapperPlatformLayer;
@@ -57,10 +58,25 @@ public:
     // Presents what the last update() painted to the window, if anything. Called after the web process has
     // been answered, so a present that waits for the display doesn't hold up its next rendering update.
     void present();
+#if OS(WINDOWS)
+    // A video frame sent straight from the web process's video sink thread (not with a rendering update): uploads it
+    // into the layer's video contents and repaints the scene as the last update left it, for present() to show.
+    // Only for scenes painted to the window; returns false (the frame is dropped) otherwise.
+    bool updateVideoFrame(WebCore::PlatformLayerIdentifier, const WebCore::ShareableBitmap&);
+#endif
 
 private:
     struct Layer;
     using LayerMap = HashMap<WebCore::PlatformLayerIdentifier, std::unique_ptr<Layer>>;
+    void uploadVideoFrame(Layer&, const WebCore::ShareableBitmap&);
+#if OS(WINDOWS)
+    WebCore::IntSize m_lastViewport;
+    Markable<WebCore::PlatformLayerIdentifier> m_lastRootLayer;
+    bool m_lastUpdateWasOnScreen { false };
+    // Frames for layers the scene doesn't have yet (a paused video's first frame can arrive before the rendering
+    // update that adds its layer): applied when the layer arrives.
+    HashMap<WebCore::PlatformLayerIdentifier, RefPtr<WebCore::ShareableBitmap>> m_pendingVideoFrames;
+#endif
 
     WebCore::ProcessIdentifier m_webProcessIdentifier;
     WCSceneContext* m_context { nullptr };

@@ -76,6 +76,9 @@ private:
     void graphicsLayerRemoved(GraphicsLayerWC&) override;
     void commitLayerUpdateInfo(WCLayerUpdateInfo&&) override;
     RefPtr<WebCore::ImageBuffer> createImageBuffer(WebCore::FloatSize, float deviceScaleFactor) override;
+#if ENABLE(VIDEO) && OS(WINDOWS)
+    RefPtr<WebCore::MediaPlayerCompositorFrameSink> createVideoFrameSink(WebCore::PlatformLayerIdentifier) override;
+#endif
 
     bool isCompositingMode();
     void updateRendering();

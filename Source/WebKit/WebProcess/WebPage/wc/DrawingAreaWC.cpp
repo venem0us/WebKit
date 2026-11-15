@@ -534,6 +534,13 @@ RefPtr<ImageBuffer> DrawingAreaWC::createImageBuffer(FloatSize size, float devic
     return ImageBuffer::create<ImageBufferShareableBitmapBackend>(size, deviceScaleFactor, ColorSpace::SRGB(), { PixelFormat::BGRA8 }, RenderingPurpose::DOM, { });
 }
 
+#if ENABLE(VIDEO) && OS(WINDOWS)
+RefPtr<WebCore::MediaPlayerCompositorFrameSink> DrawingAreaWC::createVideoFrameSink(WebCore::PlatformLayerIdentifier layer)
+{
+    return m_remoteWCLayerTreeHostProxy->createVideoFrameSink(layer);
+}
+#endif
+
 void DrawingAreaWC::displayDidRefresh(MonotonicTime)
 {
 #if OS(WINDOWS)

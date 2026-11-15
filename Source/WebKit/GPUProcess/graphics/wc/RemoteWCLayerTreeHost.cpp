@@ -110,6 +110,37 @@ void RemoteWCLayerTreeHost::update(WCUpdateInfo&& update, CompletionHandler<void
     });
 }
 
+#if OS(WINDOWS)
+void RemoteWCLayerTreeHost::updateVideoFrame(WebCore::PlatformLayerIdentifier layer, WCBackingStore&& frame)
+{
+    RefPtr bitmap = frame.bitmap();
+    if (!bitmap)
+        return;
+    {
+        Locker locker { m_videoFrames->lock };
+        m_videoFrames->frames.set(layer, WTF::move(bitmap));
+        if (m_videoFrames->drainScheduled)
+            return;
+        m_videoFrames->drainScheduled = true;
+    }
+    // Queued behind any layer tree update already on the work queue, so a frame never lands on a layer the scene
+    // doesn't have yet. The scene outlives this task: it's destroyed by a task queued after it.
+    remoteGraphicsStreamWorkQueue().dispatch([scene = m_scene.get(), mailbox = m_videoFrames] {
+        HashMap<WebCore::PlatformLayerIdentifier, RefPtr<WebCore::ShareableBitmap>> frames;
+        {
+            Locker locker { mailbox->lock };
+            frames = std::exchange(mailbox->frames, { });
+            mailbox->drainScheduled = false;
+        }
+        bool painted = false;
+        for (auto& [layer, bitmap] : frames)
+            painted |= scene->updateVideoFrame(layer, *bitmap);
+        if (painted)
+            scene->present();
+    });
+}
+#endif
+
 } // namespace WebKit
 
 #endif // USE(GRAPHICS_LAYER_WC)
