@@ -122,6 +122,35 @@ static void NTAPI queueTimerProc(PVOID, BOOLEAN)
         PostMessage(timerWindowHandle, timerFiredMessage, 0, 0);
 }
 
+// A high-resolution waitable timer (Windows 10 1803 and later) with a thread that posts timerFiredMessage when it fires.
+// The timer queue below rounds each wait down to whole milliseconds, and posting at once whenever the interval was under
+// 10 ms woke the main thread early only to set the timer again: a page's setInterval(4) ran every 8 ms (125 a second,
+// against Chrome's 250) on the GPU PC. This one waits for the exact deadline, in 100 ns units.
+// GLASS_TIMER_QUEUE=1 keeps the timer queue (comparison, rollback).
+static HANDLE highResolutionTimer()
+{
+    static HANDLE timer = [] () -> HANDLE {
+        if (const char* queue = getenv("GLASS_TIMER_QUEUE"); queue && !strcmp(queue, "1"))
+            return nullptr;
+        HANDLE handle = CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
+        if (!handle)
+            return nullptr;
+        HANDLE thread = CreateThread(nullptr, 0, [](LPVOID parameter) -> DWORD {
+            SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
+            while (WaitForSingleObject(static_cast<HANDLE>(parameter), INFINITE) == WAIT_OBJECT_0)
+                queueTimerProc(nullptr, FALSE);
+            return 0;
+        }, handle, 0, nullptr);
+        if (!thread) {
+            CloseHandle(handle);
+            return nullptr;
+        }
+        CloseHandle(thread);
+        return handle;
+    }();
+    return timer;
+}
+
 void MainThreadSharedTimer::setFireInterval(Seconds intervalInSeconds)
 {
     ASSERT(m_firedFunction);
@@ -160,12 +189,19 @@ void MainThreadSharedTimer::setFireInterval(Seconds intervalInSeconds)
 
     // If the queue doesn't contains input events, we use a higher priorty timer event posting mechanism.
     if (!(queueStatus & (QS_MOUSEBUTTON | QS_KEY | QS_RAWINPUT))) {
-        if (intervalInMS < USER_TIMER_MINIMUM && !processingCustomTimerMessage && !(queueStatus & QS_PAINT)) {
+        HANDLE preciseTimer = highResolutionTimer();
+        // With the precise timer, only a timer that is already due is posted at once.
+        bool isDue = preciseTimer ? interval <= 0 : intervalInMS < USER_TIMER_MINIMUM;
+        if (isDue && !processingCustomTimerMessage && !(queueStatus & QS_PAINT)) {
             // Call PostMessage immediately if the timer is already expired, unless a paint is pending.
             // (we prioritize paints over timers)
             if (InterlockedIncrement(&pendingTimers) == 1)
                 PostMessage(timerWindowHandle, timerFiredMessage, 0, 0);
             timerSet = true;
+        } else if (preciseTimer) {
+            LARGE_INTEGER dueTime;
+            dueTime.QuadPart = -std::max<LONGLONG>(1, static_cast<LONGLONG>(interval * 10000)); // relative, in 100 ns units
+            timerSet = SetWaitableTimerEx(preciseTimer, &dueTime, 0, nullptr, nullptr, nullptr, 0);
         } else {
             // Otherwise, delay the PostMessage via a CreateTimerQueueTimer
             if (!timerQueue)
@@ -189,6 +225,8 @@ void MainThreadSharedTimer::setFireInterval(Seconds intervalInSeconds)
 
 void MainThreadSharedTimer::stop()
 {
+    if (HANDLE preciseTimer = highResolutionTimer())
+        CancelWaitableTimer(preciseTimer);
     if (timerQueue && timer) {
         DeleteTimerQueueTimer(timerQueue, timer, 0);
         timer = 0;
