@@ -73,6 +73,7 @@ header: "WCUpdateInfo.h"
 [Nested] struct WebKit::WCLayerUpdateInfo::PlatformLayerChanges {
     bool hasLayer;
     Vector<WebKit::WCContentBufferIdentifier> identifiers;
+    std::optional<WebKit::WCBackingStore> videoFrame;
 }
 
 [CustomHeader] struct WebKit::WCLayerUpdateInfo {

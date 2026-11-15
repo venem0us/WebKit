@@ -41,6 +41,7 @@
 #include "WebPageInlines.h"
 #include "WebPreferencesKeys.h"
 #include "WebProcess.h"
+#include <WebCore/DisplayRefreshMonitor.h>
 #include <WebCore/ImageBuffer.h>
 #include <WebCore/LocalFrame.h>
 #include <WebCore/LocalFrameView.h>
@@ -207,11 +208,31 @@ void DrawingAreaWC::updateRenderingWithForcedRepaintAsync(WebPage&, CompletionHa
 void DrawingAreaWC::triggerRenderingUpdate()
 {
     if (m_isRenderingSuspended || m_waitDidUpdate) {
+#if OS(WINDOWS)
+        if (m_renderingStats && m_waitDidUpdate)
+            ++m_renderingStats->deferredTriggers;
+        DisplayRefreshMonitor::traceRenderingEvent('Q');
+#endif
         m_hasDeferredRenderingUpdate = true;
         return;
     }
+#if OS(WINDOWS)
+    // A display tick is delivered at the top of the run loop, so update right away. A zero-delay timer
+    // waits behind the page's own timers and tasks, often long enough for the next video frame to arrive
+    // and replace the one this tick was for.
+    // Composited pages only: without compositing, every repaint triggers an update directly, and those
+    // land between ticks.
+    if (DisplayRefreshMonitor::isDeliveringDisplayTick() && !m_inUpdateRendering && isCompositingMode()) {
+        m_updateRenderingTimer.stop();
+        updateRendering();
+        return;
+    }
+#endif
     if (m_updateRenderingTimer.isActive())
         return;
+#if OS(WINDOWS)
+    DisplayRefreshMonitor::traceRenderingEvent('Z');
+#endif
     m_updateRenderingTimer.startOneShot(0_s);
 }
 
@@ -237,6 +258,18 @@ void DrawingAreaWC::updateRendering()
 
     ASSERT(!m_waitDidUpdate);
     m_waitDidUpdate = true;
+#if OS(WINDOWS)
+    DisplayRefreshMonitor::traceRenderingEvent('U');
+#endif
+#if OS(WINDOWS)
+    if (m_renderingStats) {
+        m_renderingStats->updateStartUs = RenderingUpdateStats::now();
+        m_renderingStats->fenceDoneUs = 0;
+        m_renderingStats->compositorSentUs = 0;
+        m_renderingStats->uiSentUs = 0;
+        ++m_renderingStats->updates;
+    }
+#endif
 
     Ref webPage = m_webPage.get();
     webPage->updateRendering();
@@ -252,6 +285,10 @@ void DrawingAreaWC::updateRendering()
         sendUpdateAC();
     else
         sendUpdateNonAC();
+#if OS(WINDOWS)
+    if (m_renderingStats && m_renderingStats->updateStartUs)
+        m_renderingStats->web.add(RenderingUpdateStats::now() - m_renderingStats->updateStartUs);
+#endif
 }
 
 void DrawingAreaWC::sendUpdateAC()
@@ -287,14 +324,57 @@ void DrawingAreaWC::sendUpdateAC()
 
         auto fence = m_webPage->ensureRemoteRenderingBackendProxy().flushImageBuffers();
 
-        m_commitQueue->dispatch([this, weakThis = WeakPtr(*this), stateID = m_backingStoreStateID, updateInfo = std::exchange(m_updateInfo, { }), fence = WTF::move(fence), willCallDisplayDidRefresh]() mutable {
+#if OS(WINDOWS)
+        RefPtr stats = willCallDisplayDidRefresh ? m_renderingStats : nullptr;
+#endif
+        m_commitQueue->dispatch([this, weakThis = WeakPtr(*this), stateID = m_backingStoreStateID, updateInfo = std::exchange(m_updateInfo, { }), fence = WTF::move(fence), willCallDisplayDidRefresh
+#if OS(WINDOWS)
+            , stats
+#endif
+            ]() mutable {
+#if OS(WINDOWS)
+            auto fenceStart = stats ? RenderingUpdateStats::now() : 0;
+#endif
             fence();
-            RunLoop::mainSingleton().dispatch([this, weakThis = WTF::move(weakThis), stateID, updateInfo = WTF::move(updateInfo), willCallDisplayDidRefresh]() mutable {
+#if OS(WINDOWS)
+            if (stats) {
+                auto done = RenderingUpdateStats::now();
+                stats->gpuPaint.add(done - fenceStart);
+                stats->fenceDoneUs = done;
+            }
+#endif
+            RunLoop::mainSingleton().dispatch([this, weakThis = WTF::move(weakThis), stateID, updateInfo = WTF::move(updateInfo), willCallDisplayDidRefresh
+#if OS(WINDOWS)
+                , stats
+#endif
+                ]() mutable {
                 if (!weakThis)
                     return;
-                m_remoteWCLayerTreeHostProxy->update(WTF::move(updateInfo), [this, weakThis = WTF::move(weakThis), stateID, willCallDisplayDidRefresh](std::optional<UpdateInfo> updateInfo) {
+#if OS(WINDOWS)
+                if (stats) {
+                    auto nowUs = RenderingUpdateStats::now();
+                    if (auto done = stats->fenceDoneUs.load())
+                        stats->hop.add(nowUs - done);
+                    stats->compositorSentUs = nowUs;
+                    ++stats->compositedUpdates;
+                }
+#endif
+                m_remoteWCLayerTreeHostProxy->update(WTF::move(updateInfo), [this, weakThis = WTF::move(weakThis), stateID, willCallDisplayDidRefresh
+#if OS(WINDOWS)
+                    , stats
+#endif
+                    ](std::optional<UpdateInfo> updateInfo) {
                     if (!weakThis)
                         return;
+#if OS(WINDOWS)
+                    if (stats) {
+                        auto nowUs = RenderingUpdateStats::now();
+                        if (auto sent = stats->compositorSentUs.load())
+                            stats->compositor.add(nowUs - sent);
+                        if (updateInfo && stateID == m_backingStoreStateID)
+                            stats->uiSentUs = nowUs;
+                    }
+#endif
                     if (updateInfo && stateID == m_backingStoreStateID) {
                         ASSERT(willCallDisplayDidRefresh);
                         send(Messages::DrawingAreaProxy::Update(m_backingStoreStateID, WTF::move(*updateInfo)));
@@ -371,11 +451,40 @@ void DrawingAreaWC::sendUpdateNonAC()
 
     auto fence = m_webPage->ensureRemoteRenderingBackendProxy().flushImageBuffers();
 
-    m_commitQueue->dispatch([this, weakThis = WeakPtr(*this), stateID = m_backingStoreStateID, updateInfo = WTF::move(updateInfo), image = WTF::move(image), fence = WTF::move(fence)]() mutable {
+#if OS(WINDOWS)
+    RefPtr stats = m_renderingStats;
+#endif
+    m_commitQueue->dispatch([this, weakThis = WeakPtr(*this), stateID = m_backingStoreStateID, updateInfo = WTF::move(updateInfo), image = WTF::move(image), fence = WTF::move(fence)
+#if OS(WINDOWS)
+        , stats
+#endif
+        ]() mutable {
+#if OS(WINDOWS)
+        auto fenceStart = stats ? RenderingUpdateStats::now() : 0;
+#endif
         fence();
-        RunLoop::mainSingleton().dispatch([this, weakThis = WTF::move(weakThis), stateID, updateInfo = WTF::move(updateInfo), image = WTF::move(image)]() mutable {
+#if OS(WINDOWS)
+        if (stats) {
+            auto done = RenderingUpdateStats::now();
+            stats->gpuPaint.add(done - fenceStart);
+            stats->fenceDoneUs = done;
+        }
+#endif
+        RunLoop::mainSingleton().dispatch([this, weakThis = WTF::move(weakThis), stateID, updateInfo = WTF::move(updateInfo), image = WTF::move(image)
+#if OS(WINDOWS)
+            , stats
+#endif
+            ]() mutable {
             if (!weakThis)
                 return;
+#if OS(WINDOWS)
+            if (stats) {
+                auto nowUs = RenderingUpdateStats::now();
+                if (auto done = stats->fenceDoneUs.load())
+                    stats->hop.add(nowUs - done);
+                stats->uiSentUs = nowUs;
+            }
+#endif
             if (stateID != m_backingStoreStateID) {
                 displayDidRefresh();
                 return;
@@ -418,7 +527,20 @@ RefPtr<ImageBuffer> DrawingAreaWC::createImageBuffer(FloatSize size, float devic
 
 void DrawingAreaWC::displayDidRefresh(MonotonicTime)
 {
+#if OS(WINDOWS)
+    if (m_renderingStats) {
+        auto nowUs = RenderingUpdateStats::now();
+        if (auto start = m_renderingStats->updateStartUs.exchange(0))
+            m_renderingStats->cycle.add(nowUs - start);
+        if (auto sent = m_renderingStats->uiSentUs.exchange(0))
+            m_renderingStats->ui.add(nowUs - sent);
+        m_renderingStats->reportIfDue();
+    }
+#endif
     m_waitDidUpdate = false;
+#if OS(WINDOWS)
+    DisplayRefreshMonitor::traceRenderingEvent('G');
+#endif
     didCompleteRenderingUpdateDisplay();
     didCompleteRenderingFrame();
     if (m_forceRepaintCompletionHandler) {
@@ -429,6 +551,16 @@ void DrawingAreaWC::displayDidRefresh(MonotonicTime)
     }
     if (m_hasDeferredRenderingUpdate) {
         m_hasDeferredRenderingUpdate = false;
+#if OS(WINDOWS)
+        // The GPU's reply is handled at the top of the run loop, like a display tick, so run the update
+        // that was waiting for it right away instead of queuing it behind the page's timers and tasks.
+        // Composited pages only, for the same reason as in triggerRenderingUpdate().
+        if (!m_isRenderingSuspended && !m_inUpdateRendering && isCompositingMode()) {
+            m_updateRenderingTimer.stop();
+            updateRendering();
+            return;
+        }
+#endif
         triggerRenderingUpdate();
     }
 }

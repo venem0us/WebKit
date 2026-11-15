@@ -39,6 +39,8 @@ public:
     WCBackingStore() = default;
     WebCore::ImageBuffer* imageBuffer() { return m_imageBuffer.get(); }
     void setImageBuffer(RefPtr<WebCore::ImageBuffer>&& image) { m_imageBuffer = WTF::move(image); }
+    // Sends pixels that are already in shared memory (a video frame) instead of an image buffer's.
+    void setBitmap(RefPtr<WebCore::ShareableBitmap>&& bitmap) { m_bitmap = WTF::move(bitmap); }
     WebCore::ShareableBitmap* bitmap() const { return m_bitmap.get(); }
 
 private:

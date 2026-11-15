@@ -81,6 +81,13 @@ public:
 
     void close();
 
+    // Element full screen; see WKViewSetFullScreenCallbacks().
+    void setFullScreenCallbacks(WKViewEnterFullScreenCallback, WKViewExitFullScreenCallback, const void* clientInfo);
+    bool enterFullScreen();
+    void exitFullScreen();
+    bool isFullScreen() const { return m_isFullScreen; }
+    void requestExitFullScreen();
+
 private:
     WebView(RECT, const API::PageConfiguration&, HWND parentWindow);
 
@@ -154,6 +161,10 @@ private:
     bool m_trackingMouseLeave { false };
     bool m_isBeingDestroyed { false };
     bool m_usesOffscreenRendering { false };
+    bool m_isFullScreen { false };
+    WKViewEnterFullScreenCallback m_enterFullScreenCallback { nullptr };
+    WKViewExitFullScreenCallback m_exitFullScreenCallback { nullptr };
+    const void* m_fullScreenClientInfo { nullptr };
 
     const std::unique_ptr<WebKit::PageClientImpl> m_pageClient;
     const RefPtr<WebPageProxy> m_page;

@@ -72,3 +72,18 @@ void WKViewSetScrollOffsetOnNextResize(WKViewRef viewRef, WKSize scrollOffset)
 {
     toImpl(viewRef)->setScrollOffsetOnNextResize(toIntSize(scrollOffset));
 }
+
+void WKViewSetFullScreenCallbacks(WKViewRef viewRef, WKViewEnterFullScreenCallback enterFullScreen, WKViewExitFullScreenCallback exitFullScreen, const void* clientInfo)
+{
+    toImpl(viewRef)->setFullScreenCallbacks(enterFullScreen, exitFullScreen, clientInfo);
+}
+
+bool WKViewIsFullScreen(WKViewRef viewRef)
+{
+    return toImpl(viewRef)->isFullScreen();
+}
+
+void WKViewRequestExitFullScreen(WKViewRef viewRef)
+{
+    toImpl(viewRef)->requestExitFullScreen();
+}

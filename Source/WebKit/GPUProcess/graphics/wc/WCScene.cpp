@@ -28,6 +28,7 @@
 
 #if USE(GRAPHICS_LAYER_WC)
 
+#include "GPURenderingStats.h"
 #include "RemoteGraphicsContextGL.h"
 #include "WCContentBuffer.h"
 #include "WCContentBufferManager.h"
@@ -70,6 +71,8 @@ public:
     WebCore::TextureMapperLayer texmapLayer;
     std::unique_ptr<WebCore::TextureMapperSparseBackingStore> backingStore;
     std::unique_ptr<WebCore::TextureMapperLayer> backdropLayer;
+    // The current frame of a video the web process hands over frame by frame, drawn into the contents rect.
+    std::unique_ptr<WebCore::TextureMapperSparseBackingStore> videoFrame;
     WCContentBuffer* contentBuffer { nullptr };
     Markable<WebCore::LayerHostingContextIdentifier> hostIdentifier;
 };
@@ -98,6 +101,10 @@ WCScene::~WCScene()
 
 std::optional<UpdateInfo> WCScene::update(WCUpdateInfo&& update)
 {
+#if OS(WINDOWS)
+    auto* stats = GPURenderingStats::singletonIfEnabled();
+    GPURenderingStats::ScopedTimer compositeTimer(stats ? &stats->composite : nullptr);
+#endif
     if (!m_context->makeContextCurrent())
         return std::nullopt;
     m_textureMapper->releaseUnusedTexturesNow();
@@ -223,7 +230,23 @@ std::optional<UpdateInfo> WCScene::update(WCUpdateInfo&& update)
                     layer->contentBuffer = nullptr;
                 }
                 layer->texmapLayer.setContentsLayer(nullptr);
-            } else {
+                layer->videoFrame = nullptr;
+            } else if (layerUpdate.platformLayer.videoFrame) {
+                RefPtr bitmap = layerUpdate.platformLayer.videoFrame->bitmap();
+                RefPtr image = bitmap ? WebCore::NativeImage::create(bitmap->createPlatformImage(WebCore::BackingStoreCopy::DontCopyBackingStore)) : nullptr;
+                if (image) {
+#if OS(WINDOWS)
+                    auto* stats = GPURenderingStats::singletonIfEnabled();
+                    GPURenderingStats::ScopedTimer timer(stats ? &stats->videoUpload : nullptr);
+#endif
+                    if (!layer->videoFrame)
+                        layer->videoFrame = makeUnique<WebCore::TextureMapperSparseBackingStore>();
+                    auto size = bitmap->size();
+                    layer->videoFrame->setSize(size);
+                    layer->videoFrame->updateContents({ }, *image, { { }, size });
+                    layer->texmapLayer.setContentsLayer(layer->videoFrame.get());
+                }
+            } else if (!layer->videoFrame) {
                 WCContentBuffer* contentBuffer = nullptr;
                 for (auto identifier : layerUpdate.platformLayer.identifiers)
                     contentBuffer = WCContentBufferManager::singleton().releaseContentBufferIdentifier(m_webProcessIdentifier, identifier);
@@ -271,6 +294,11 @@ std::optional<UpdateInfo> WCScene::update(WCUpdateInfo&& update)
     } else
         glViewport(0, 0, update.viewport.width(), update.viewport.height());
 
+#if OS(WINDOWS)
+    std::optional<GPURenderingStats::ScopedTimer> paintTimer;
+    if (stats)
+        paintTimer.emplace(&stats->paint);
+#endif
     m_textureMapper->beginPainting(WebCore::TextureMapper::FlipY::No, surface);
     rootLayer->paint(*m_textureMapper);
     if (showFPS)
@@ -280,6 +308,9 @@ std::optional<UpdateInfo> WCScene::update(WCUpdateInfo&& update)
         glReadPixels(0, 0, update.viewport.width(), update.viewport.height(), GL_BGRA, GL_UNSIGNED_BYTE, bitmap->mutableSpan().data());
     }
     m_textureMapper->endPainting();
+#if OS(WINDOWS)
+    paintTimer.reset();
+#endif
 
     std::optional<UpdateInfo> result;
     if (update.remoteContextHostedIdentifier)
@@ -296,8 +327,22 @@ std::optional<UpdateInfo> WCScene::update(WCUpdateInfo&& update)
             result->bitmapHandle = WTF::move(*handle);
         }
     } else
-        m_context->swapBuffers();
+        m_needsPresent = true;
     return result;
+}
+
+void WCScene::present()
+{
+    if (!m_needsPresent)
+        return;
+    m_needsPresent = false;
+#if OS(WINDOWS)
+    auto* stats = GPURenderingStats::singletonIfEnabled();
+    GPURenderingStats::ScopedTimer presentTimer(stats ? &stats->present : nullptr);
+#endif
+    if (!m_context->makeContextCurrent())
+        return;
+    m_context->swapBuffers();
 }
 
 } // namespace WebKit

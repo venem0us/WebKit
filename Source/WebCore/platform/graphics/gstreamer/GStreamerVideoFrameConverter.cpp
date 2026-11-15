@@ -36,7 +36,83 @@
 #include <gst/gl/gl.h>
 #endif
 
+#if OS(WINDOWS)
+#include "GStreamerVideoStats.h"
+#include <algorithm>
+#include <gst/video/video.h>
+#include <wtf/Lock.h>
+#include <wtf/NumberOfCores.h>
+#endif
+
 namespace WebCore {
+
+#if OS(WINDOWS)
+// Windows (experimental port): video frames are painted through GraphicsContext, so every painted frame is
+// converted to BGRx here. Running the converter pipeline from NULL to PAUSED and back for each frame blocks the
+// main thread for tens of milliseconds, which caps playback near 10 frames per second and stalls the page.
+// System-memory frames are converted directly with a cached, multithreaded GstVideoConverter instead.
+class DirectVideoFrameConverter {
+public:
+    static DirectVideoFrameConverter& singleton()
+    {
+        static NeverDestroyed<DirectVideoFrameConverter> converter;
+        return converter;
+    }
+
+    GRefPtr<GstSample> convert(GstSample* sample, GstCaps* destinationCaps)
+    {
+        auto* buffer = gst_sample_get_buffer(sample);
+        auto* inputCaps = gst_sample_get_caps(sample);
+        if (!buffer || !inputCaps)
+            return nullptr;
+        GstVideoInfo inputInfo;
+        GstVideoInfo outputInfo;
+        if (!gst_video_info_from_caps(&inputInfo, inputCaps) || !gst_video_info_from_caps(&outputInfo, destinationCaps))
+            return nullptr;
+
+        Locker locker { m_lock };
+        if (!m_converter || !gst_video_info_is_equal(&inputInfo, &m_inputInfo) || !gst_video_info_is_equal(&outputInfo, &m_outputInfo)) {
+            if (m_converter)
+                gst_video_converter_free(m_converter);
+            unsigned threads = std::clamp<unsigned>(WTF::numberOfProcessorCores() / 2, 1, 4);
+            m_converter = gst_video_converter_new(&inputInfo, &outputInfo, gst_structure_new("GstVideoConverter",
+                GST_VIDEO_CONVERTER_OPT_THREADS, G_TYPE_UINT, threads,
+                GST_VIDEO_CONVERTER_OPT_DITHER_METHOD, GST_TYPE_VIDEO_DITHER_METHOD, GST_VIDEO_DITHER_NONE, nullptr));
+            if (!m_converter)
+                return nullptr;
+            m_inputInfo = inputInfo;
+            m_outputInfo = outputInfo;
+        }
+
+        GstVideoFrame inputFrame;
+        if (!gst_video_frame_map(&inputFrame, &inputInfo, buffer, GST_MAP_READ))
+            return nullptr;
+        GRefPtr outputBuffer = adoptGRef(gst_buffer_new_allocate(nullptr, GST_VIDEO_INFO_SIZE(&outputInfo), nullptr));
+        GstVideoFrame outputFrame;
+        if (!outputBuffer || !gst_video_frame_map(&outputFrame, &outputInfo, outputBuffer.get(), GST_MAP_WRITE)) {
+            gst_video_frame_unmap(&inputFrame);
+            return nullptr;
+        }
+        gst_video_converter_frame(m_converter, &inputFrame, &outputFrame);
+        gst_video_frame_unmap(&outputFrame);
+        gst_video_frame_unmap(&inputFrame);
+        gst_buffer_copy_into(outputBuffer.get(), buffer, GST_BUFFER_COPY_TIMESTAMPS, 0, -1);
+        return adoptGRef(gst_sample_new(outputBuffer.get(), destinationCaps, gst_sample_get_segment(sample), nullptr));
+    }
+
+private:
+    Lock m_lock;
+    GstVideoConverter* m_converter WTF_GUARDED_BY_LOCK(m_lock) { nullptr };
+    GstVideoInfo m_inputInfo WTF_GUARDED_BY_LOCK(m_lock);
+    GstVideoInfo m_outputInfo WTF_GUARDED_BY_LOCK(m_lock);
+};
+
+static bool isSystemMemory(GstCaps* caps)
+{
+    auto* features = gst_caps_get_features(caps, 0);
+    return !features || gst_caps_features_is_any(features) || gst_caps_features_contains(features, GST_CAPS_FEATURE_MEMORY_SYSTEM_MEMORY);
+}
+#endif
 
 WTF_MAKE_TZONE_ALLOCATED_IMPL(GStreamerVideoFrameConverter);
 WTF_MAKE_TZONE_ALLOCATED_IMPL(GStreamerVideoFrameConverter::Pipeline);
@@ -235,8 +311,17 @@ GRefPtr<GstSample> GStreamerVideoFrameConverter::convert(const GRefPtr<GstSample
     if (gst_caps_is_equal(inputCaps, destinationCaps.get()))
         return GRefPtr(sample);
 
+#if OS(WINDOWS)
+    GStreamerVideoStats::ScopedTimer timer(GStreamerVideoStats::counters().convert);
+    GRefPtr<GstSample> outputSample = isSystemMemory(inputCaps) ? DirectVideoFrameConverter::singleton().convert(sample.get(), destinationCaps.get()) : nullptr;
+    if (!outputSample) {
+        Locker locker { m_lock };
+        outputSample = ensurePipeline(inputCaps).run(sample, destinationCaps.get());
+    }
+#else
     Locker locker { m_lock };
     auto outputSample = ensurePipeline(inputCaps).run(sample, destinationCaps.get());
+#endif
     if (!outputSample)
         return nullptr;
 

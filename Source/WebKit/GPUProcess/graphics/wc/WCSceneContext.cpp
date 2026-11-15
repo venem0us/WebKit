@@ -31,6 +31,11 @@
 #include <WebCore/GLContext.h>
 #include <WebCore/PlatformDisplay.h>
 #include <WebCore/TextureMapper.h>
+#include <cstdlib>
+
+#if OS(WINDOWS)
+#include <EGL/egl.h>
+#endif
 #include <wtf/TZoneMallocInlines.h>
 
 namespace WebKit {
@@ -40,6 +45,19 @@ WTF_MAKE_TZONE_ALLOCATED_IMPL(WCSceneContext);
 WCSceneContext::WCSceneContext(uint64_t nativeWindow)
     : m_glContext(WebCore::GLContext::create(WebCore::PlatformDisplay::sharedDisplay(), reinterpret_cast<GLNativeWindowType>(nativeWindow)))
 {
+#if OS(WINDOWS)
+    // With the default swap interval of 1, presenting a frame waits until the display can take another; at a
+    // steady 60 frames a second the present queue stays full, so each present blocked for most of a frame
+    // (11-14 ms full screen) and held up the next composite. The window is composed by DWM, which shows the
+    // newest frame at each refresh, so presenting without waiting doesn't tear. WEBKIT_WC_SWAP_INTERVAL
+    // overrides the interval (1 restores the waiting present).
+    if (m_glContext && m_glContext->makeContextCurrent()) {
+        int interval = 0;
+        if (auto* value = std::getenv("WEBKIT_WC_SWAP_INTERVAL"); value && *value)
+            interval = std::atoi(value);
+        eglSwapInterval(eglGetCurrentDisplay(), interval);
+    }
+#endif
 }
 
 WCSceneContext::~WCSceneContext() = default;

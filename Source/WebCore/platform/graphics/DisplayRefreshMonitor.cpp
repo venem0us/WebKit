@@ -213,9 +213,22 @@ void DisplayRefreshMonitor::displayDidRefresh(const DisplayUpdate& displayUpdate
     if (m_clientsToBeNotified == &clientsToBeNotified)
         m_clientsToBeNotified = nullptr;
 
+#if PLATFORM(WIN)
+    // A client that skipped this update because it wants a lower rate (a throttled page: hidden, visually idle)
+    // is still waiting for one. Stay scheduled for it; otherwise the next update finds nothing scheduled and
+    // stops the display link, and the client, which still counts itself as scheduled, never asks again.
+    bool clientStillScheduled = false;
+    for (auto& client : m_clients)
+        clientStillScheduled |= client->isScheduled();
+#endif
+
     {
         Locker locker { m_lock };
         setIsPreviousFrameDone(true);
+#if PLATFORM(WIN)
+        if (clientStillScheduled)
+            setIsScheduled(true);
+#endif
     }
 
     DisplayRefreshMonitorManager::sharedManager().displayMonitorDisplayDidRefresh(*this);

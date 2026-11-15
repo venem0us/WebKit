@@ -44,6 +44,16 @@ WK_EXPORT void WKViewSetIsInWindow(WKViewRef view, bool isInWindow);
 WK_EXPORT void WKViewSetUsesOffscreenRendering(WKViewRef view, bool enabled);
 WK_EXPORT void WKViewSetScrollOffsetOnNextResize(WKViewRef view, WKSize scrollOffset);
 
+// Element full screen (the Fullscreen API). enterFullScreen is called when a page asks for full screen; the
+// embedder makes the view fill the screen and returns true, or returns false to refuse. exitFullScreen is
+// called when full screen ends; the embedder restores its layout. Esc in the view ends full screen, and the
+// embedder ends it with WKViewRequestExitFullScreen (for example when its own full-screen mode is left).
+typedef bool (*WKViewEnterFullScreenCallback)(WKViewRef view, const void* clientInfo);
+typedef void (*WKViewExitFullScreenCallback)(WKViewRef view, const void* clientInfo);
+WK_EXPORT void WKViewSetFullScreenCallbacks(WKViewRef view, WKViewEnterFullScreenCallback enterFullScreen, WKViewExitFullScreenCallback exitFullScreen, const void* clientInfo);
+WK_EXPORT bool WKViewIsFullScreen(WKViewRef view);
+WK_EXPORT void WKViewRequestExitFullScreen(WKViewRef view);
+
 #ifdef __cplusplus
 }
 #endif

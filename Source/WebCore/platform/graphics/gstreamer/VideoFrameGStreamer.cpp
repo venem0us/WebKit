@@ -27,6 +27,9 @@
 #include "GLContext.h"
 #include "GStreamerCommon.h"
 #include "GStreamerVideoFrameConverter.h"
+#if OS(WINDOWS)
+#include "GStreamerVideoStats.h"
+#endif
 #include "GraphicsContext.h"
 #include "ImageGStreamer.h"
 #include "ImageOrientation.h"
@@ -894,6 +897,9 @@ RefPtr<NativeImage> VideoFrame::copyNativeImage() const
 {
     ensureVideoFrameDebugCategoryInitialized();
     GST_CAT_DEBUG(GST_CAT_PERFORMANCE, "Copying native image");
+#if OS(WINDOWS)
+    GStreamerVideoStats::ScopedTimer timer(GStreamerVideoStats::counters().copyImage);
+#endif
     auto& gstFrame = downcast<VideoFrameGStreamer>(*this);
     auto image = convertSampleToImage(gstFrame.sample(), gstFrame.info());
     if (!image)

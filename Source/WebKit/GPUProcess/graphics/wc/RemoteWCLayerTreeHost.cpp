@@ -104,6 +104,9 @@ void RemoteWCLayerTreeHost::update(WCUpdateInfo&& update, CompletionHandler<void
         RunLoop::mainSingleton().dispatch([updateInfo = WTF::move(updateInfo), completionHandler = WTF::move(completionHandler)]() mutable {
             completionHandler(WTF::move(updateInfo));
         });
+        // Present after answering: the swap can wait for the display, and the web process can prepare its
+        // next update meanwhile. That update queues behind the present on this work queue.
+        scene->present();
     });
 }
 

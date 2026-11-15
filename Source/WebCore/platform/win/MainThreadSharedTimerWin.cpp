@@ -33,6 +33,7 @@
 #include <wtf/WindowsExtras.h>
 
 #include <mmsystem.h>
+#include <mutex>
 
 // These aren't in winuser.h with the MSVS 2003 Platform SDK, 
 // so use default values in that case.
@@ -63,7 +64,9 @@ static bool processingCustomTimerMessage = false;
 static LONG pendingTimers;
 
 const int timerResolution = 1; // To improve timer resolution, we call timeBeginPeriod/timeEndPeriod with this value to increase timer resolution to 1ms.
-const int highResolutionThresholdMsec = 16; // Only activate high-res timer for sub-16ms timers (Windows can fire timers at 16ms intervals without changing the system resolution).
+// Only activate high-res timer for timers up to a 50Hz frame. The default 15.6ms tick turns the 16.67ms
+// rendering update timer into a mix of 15.6ms and 31.2ms waits (about 42 updates per second).
+const int highResolutionThresholdMsec = 21;
 const int stopHighResTimerInMsec = 300; // Stop high-res timer after 0.3 seconds to lessen power consumption (we don't use a smaller time since oscillating between high and low resolution breaks timer accuracy on XP).
 
 enum {
@@ -136,6 +139,16 @@ void MainThreadSharedTimer::setFireInterval(Seconds intervalInSeconds)
     if (interval < highResolutionThresholdMsec) {
         if (!highResTimerActive) {
             highResTimerActive = true;
+            static std::once_flag onceFlag;
+            std::call_once(onceFlag, [] {
+                // Windows 11 ignores timeBeginPeriod for processes without visible windows (like the web process)
+                // unless they opt out of timer resolution throttling.
+                PROCESS_POWER_THROTTLING_STATE state { };
+                state.Version = PROCESS_POWER_THROTTLING_CURRENT_VERSION;
+                state.ControlMask = PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION;
+                state.StateMask = 0;
+                SetProcessInformation(GetCurrentProcess(), ProcessPowerThrottling, &state, sizeof(state));
+            });
             timeBeginPeriod(timerResolution);
         }
         SetTimer(timerWindowHandle, endHighResTimerID, stopHighResTimerInMsec, 0);

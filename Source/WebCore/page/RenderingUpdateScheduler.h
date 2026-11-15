@@ -27,6 +27,7 @@
 
 #include "AnimationFrameRate.h"
 #include "DisplayRefreshMonitorClient.h"
+#include <wtf/MonotonicTime.h>
 #include <wtf/Seconds.h>
 #include <wtf/TZoneMalloc.h>
 #include <wtf/WeakRef.h>
@@ -69,6 +70,9 @@ private:
     std::unique_ptr<Timer> m_refreshTimer;
     unsigned m_rescheduledRenderingUpdateCount { 0 };
     bool m_useTimer { false };
+#if OS(WINDOWS)
+    MonotonicTime m_lastTimerFireTime;
+#endif
 };
 
 } // namespace WebCore

@@ -328,6 +328,12 @@ private:
 #if PLATFORM(COCOA) || USE(COORDINATED_GRAPHICS)
             ScrollableNonMainFrameTrigger |
 #endif
+#if USE(GRAPHICS_LAYER_WC)
+            // CSS filters get their own layer and are applied by the GPU compositor (TextureMapper). Otherwise
+            // they are rasterized on the CPU into the page's tiles: a full-screen blurred canvas (YouTube's
+            // ambient light) cost over 100 ms each time it changed.
+            FilterTrigger |
+#endif
 #if PLATFORM(IOS_FAMILY)
             AnimatedOpacityTrigger | // Allow opacity animations to trigger compositing mode for iPhone: <rdar://problem/7830677>
 #endif

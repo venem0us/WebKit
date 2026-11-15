@@ -92,6 +92,13 @@
 #include <limits>
 #include <wtf/FileSystem.h>
 #include <wtf/HexNumber.h>
+#include <wtf/NumberOfCores.h>
+#if OS(WINDOWS)
+#include "GStreamerVideoStats.h"
+#if OS(WINDOWS)
+#include "DisplayRefreshMonitorWin.h"
+#endif
+#endif
 #include <wtf/glib/GLibExtras.h>
 #include <wtf/glib/WTFGType.h>
 #include <wtf/MathExtras.h>
@@ -3857,10 +3864,53 @@ void MediaPlayerPrivateGStreamer::configureVideoDecoder(GstElement* decoder)
         m_videoDecoderPlatform = GstVideoDecoderPlatform::Qualcomm;
 
     if (gstElementMatchesFactoryAndHasProperty(decoder, "avdec*"_s, "max-threads"_s)) {
+#if OS(WINDOWS)
+        // The Windows port decodes in software only, so two threads can't keep up with 1080p60 and higher.
+        g_object_set(decoder, "max-threads", static_cast<int>(std::clamp(WTF::numberOfProcessorCores(), 2, 8)), nullptr);
+#else
         // Set the decoder maximum number of threads to a low, fixed value, not depending on the
         // platform. This also helps with processing metrics gathering. When using the default value
         // the decoder introduces artificial processing latency reflecting the maximum number of threads.
         g_object_set(decoder, "max-threads", 2, nullptr);
+#endif
+#if OS(WINDOWS)
+        // Don't show frames decoded without their reference frames (grey, smeared pictures when joining a live
+        // stream mid-way or after a gap); the next keyframe brings a clean picture.
+        if (gstObjectHasProperty(decoder, "output-corrupt"_s))
+            g_object_set(decoder, "output-corrupt", FALSE, nullptr);
+
+        // Frame threading holds back about one frame per thread, and avdec only hands frames on when more input
+        // arrives. Near a live stream's edge (Twitch), input comes in real time, so frames left the decoder up to
+        // a few hundred milliseconds late and were dropped as late (QoS). Up to 1080p, decode with slice threading,
+        // which holds nothing back; a modern CPU decodes 1080p60 that way. Larger video keeps frame threading for
+        // throughput. libav reads the setting each time it opens the codec, on every new format (quality switch).
+        if (gstObjectHasProperty(decoder, "thread-type"_s)) {
+            guint defaultThreadType = 0;
+            g_object_get(decoder, "thread-type", &defaultThreadType, nullptr);
+            GRefPtr sinkPad = adoptGRef(gst_element_get_static_pad(decoder, "sink"));
+            gst_pad_add_probe(sinkPad.get(), GST_PAD_PROBE_TYPE_EVENT_DOWNSTREAM, [](GstPad* pad, GstPadProbeInfo* info, gpointer userData) -> GstPadProbeReturn {
+                auto* event = gst_pad_probe_info_get_event(info);
+                if (GST_EVENT_TYPE(event) != GST_EVENT_CAPS)
+                    return GST_PAD_PROBE_OK;
+                GstCaps* caps = nullptr;
+                gst_event_parse_caps(event, &caps);
+                int width = 0, height = 0;
+                if (caps && gst_caps_get_size(caps)) {
+                    auto* structure = gst_caps_get_structure(caps, 0);
+                    gst_structure_get_int(structure, "width", &width);
+                    gst_structure_get_int(structure, "height", &height);
+                }
+                constexpr guint sliceThreading = 2; // GstLibAVVidDecThreadType: frame = 1, slice = 2
+                bool lowDelay = width && height && width * height <= 1920 * 1088;
+                guint threadType = lowDelay ? sliceThreading : GPOINTER_TO_UINT(userData);
+                if (GRefPtr decoder = adoptGRef(gst_pad_get_parent_element(pad)))
+                    g_object_set(decoder.get(), "thread-type", threadType, nullptr);
+                if (GStreamerVideoStats::enabled())
+                    GST_CAT_INFO(GStreamerVideoStats::category(), "decoder %dx%d: %s threading", width, height, lowDelay ? "slice" : "default (frame)");
+                return GST_PAD_PROBE_OK;
+            }, GUINT_TO_POINTER(defaultThreadType), nullptr);
+        }
+#endif
     } else {
         // WebKitMediaSrc is emitting still-frame events to work around stalls caused by avdec_* decoders.
         // It does so regardless of the decoder we are actually using (see details in the comment there).
@@ -4018,6 +4068,40 @@ void MediaPlayerPrivateGStreamer::repaint()
         ASSERT(m_sample);
     }
     ASSERT(isMainThread());
+
+#if OS(WINDOWS)
+    if (GStreamerVideoStats::enabled()) {
+        auto& stats = GStreamerVideoStats::counters();
+        auto now = GStreamerVideoStats::nowMicroseconds();
+        ++stats.repaintsFired;
+        if (auto arrival = stats.lastArrivalUs.exchange(0))
+            stats.arrivalToRepaint.add(now - arrival);
+        stats.lastRepaintUs = now;
+    }
+    {
+        Locker sampleLocker { m_sampleMutex };
+        m_sampleForPaint = m_sample;
+        DisplayRefreshMonitorWin::noteVideoFrameRepaintRequested(m_sampleArrivalTime);
+    }
+    if (GStreamerVideoStats::enabled() && isMediaSource()) {
+        // How much the page has buffered ahead of playback, four times a second.
+        static uint64_t lastSampleUs;
+        auto now = GStreamerVideoStats::nowMicroseconds();
+        if (now - lastSampleUs >= 250000) {
+            lastSampleUs = now;
+            auto end = bufferedEndForStats();
+            auto position = currentTime();
+            if (end.isValid() && position.isValid() && end > position) {
+                auto aheadUs = static_cast<uint64_t>((end - position).toDouble() * 1000000);
+                auto& stats = GStreamerVideoStats::counters();
+                stats.mseBufferedAhead.add(aheadUs);
+                stats.mseLastBufferedAheadMs = static_cast<int64_t>(aheadUs / 1000);
+                if (aheadUs < 250000)
+                    ++stats.mseBufferedUnder250ms;
+            }
+        }
+    }
+#endif
 
     if (RefPtr player = m_player.get())
         player->repaint();
@@ -4204,6 +4288,28 @@ void MediaPlayerPrivateGStreamer::triggerRepaint(GRefPtr<GstSample>&& sample)
 {
     ASSERT(!isMainThread());
 
+#if OS(WINDOWS)
+    double arrivalTime = DisplayRefreshMonitorWin::noteVideoFrameArrival();
+    if (GStreamerVideoStats::enabled()) {
+        auto& stats = GStreamerVideoStats::counters();
+        ++stats.samplesArrived;
+        uint64_t expected = 0;
+        // Keep the oldest frame still waiting for a repaint, so coalesced repaints show their full delay.
+        stats.lastArrivalUs.compare_exchange_strong(expected, GStreamerVideoStats::nowMicroseconds());
+        GStreamerVideoStats::noteSampleFormat(sample.get());
+        if (auto* sampleBuffer = gst_sample_get_buffer(sample.get()); sampleBuffer && GST_BUFFER_PTS_IS_VALID(sampleBuffer)) {
+            auto pushed = stats.mseLastPushedPts.load();
+            if (GST_CLOCK_TIME_IS_VALID(pushed) && pushed >= GST_BUFFER_PTS(sampleBuffer)) {
+                auto aheadUs = (pushed - GST_BUFFER_PTS(sampleBuffer)) / 1000;
+                stats.mseAhead.add(aheadUs);
+                if (aheadUs < 50000)
+                    ++stats.mseAheadUnder50ms;
+            }
+        }
+        GStreamerVideoStats::reportIfDue(m_videoSink.get());
+    }
+#endif
+
     GstBuffer* buffer = gst_sample_get_buffer(sample.get());
     RELEASE_ASSERT(buffer);
     if (buffer && GST_BUFFER_PTS_IS_VALID(buffer)) {
@@ -4233,6 +4339,9 @@ void MediaPlayerPrivateGStreamer::triggerRepaint(GRefPtr<GstSample>&& sample)
         if (caps && (!m_videoInfo || !m_sample || caps != gst_sample_get_caps(m_sample.get())))
             m_videoInfo = VideoFrameGStreamer::infoFromCaps(GRefPtr(caps));
         m_sample = WTF::move(sample);
+#if OS(WINDOWS)
+        m_sampleArrivalTime = arrivalTime;
+#endif
     }
 
     if (shouldTriggerResize) {
@@ -4423,6 +4532,93 @@ void MediaPlayerPrivateGStreamer::setPresentationSize(const IntSize& size)
     m_size = size;
 }
 
+#if OS(WINDOWS)
+bool MediaPlayerPrivateGStreamer::supportsAcceleratedRendering() const
+{
+    // With accelerated compositing, the video gets its own layer and hands each frame to the compositor as an image
+    // (imageForCompositing()), which scales it on the GPU: a new frame no longer repaints any tiles. Frames are still
+    // decoded and converted in system memory, so m_canRenderingBeAccelerated stays false.
+    // WEBKIT_GST_PAINT_COMPOSITED_VIDEO=1 paints frames into the video's layer instead, as before this was added.
+    static const bool paintsCompositedVideo = [] {
+        auto* value = std::getenv("WEBKIT_GST_PAINT_COMPOSITED_VIDEO");
+        return value && *value && *value != '0';
+    }();
+    if (paintsCompositedVideo)
+        return false;
+    RefPtr player = m_player.get();
+    return player && player->acceleratedCompositingEnabled();
+}
+
+RefPtr<NativeImage> MediaPlayerPrivateGStreamer::imageForCompositing()
+{
+    if (!m_pageIsVisible || isSuspended())
+        return nullptr;
+    return presentedImage(false);
+}
+
+// The image of the frame to show now, latched by repaint(). Showing a frame is presentation on this port, whether it
+// is painted or handed to the compositor: a new frame advances the presented-frame count that
+// requestVideoFrameCallback reports. A frame shown again (another tile, or a repaint without a new frame) isn't
+// counted twice, and becomes an image only once.
+RefPtr<NativeImage> MediaPlayerPrivateGStreamer::presentedImage(bool isPainting)
+{
+    // Keep a reference to the sample to avoid keeping the sampleMutex locked, which would be prone
+    // to deadlocks if triggerRepaint is called while the video frame converter is blocked on its
+    // state change.
+    GRefPtr<GstSample> sample;
+    {
+        Locker sampleLocker { m_sampleMutex };
+        if (!GST_IS_SAMPLE(m_sample.get()))
+            return nullptr;
+        sample = GST_IS_SAMPLE(m_sampleForPaint.get()) ? m_sampleForPaint : m_sample;
+    }
+    if (!GST_IS_BUFFER(gst_sample_get_buffer(sample.get())))
+        return nullptr;
+    auto presentationSize = getVideoResolutionFromCaps(gst_sample_get_caps(sample.get()));
+    if (!presentationSize)
+        return nullptr;
+
+    bool isNewFrame;
+    {
+        Locker sampleLocker { m_sampleMutex };
+        isNewFrame = !m_lastPaintedSample || gst_sample_get_buffer(m_lastPaintedSample.get()) != gst_sample_get_buffer(sample.get());
+        if (isNewFrame) {
+            m_lastPaintedSample = sample;
+            ++m_sampleCount;
+        }
+    }
+    std::optional<GStreamerVideoStats::ScopedTimer> paintTimer;
+    if (GStreamerVideoStats::enabled()) {
+        auto& stats = GStreamerVideoStats::counters();
+        ++stats.paints;
+        if (isNewFrame) {
+            ++stats.newFramesPainted;
+            DisplayRefreshMonitorWin::noteNewVideoFramePainted();
+            GStreamerVideoStats::noteNewFramePainted(GST_BUFFER_PTS(gst_sample_get_buffer(sample.get())));
+            if (double tick = DisplayRefreshMonitorWin::lastDeliveredTickTime()) {
+                auto tickUs = static_cast<uint64_t>(tick * 1000000);
+                auto nowUs = GStreamerVideoStats::nowMicroseconds();
+                if (nowUs >= tickUs && nowUs - tickUs < 100000)
+                    stats.tickToPaint.add(nowUs - tickUs);
+            }
+        }
+        if (auto repaint = stats.lastRepaintUs.exchange(0))
+            stats.repaintToPaint.add(GStreamerVideoStats::nowMicroseconds() - repaint);
+        if (isPainting)
+            paintTimer.emplace(stats.paint);
+        GStreamerVideoStats::reportIfDue(m_videoSink.get());
+    }
+
+    RefPtr image = isNewFrame ? nullptr : m_lastPaintedImage;
+    if (!image) {
+        Ref frame = VideoFrameGStreamer::create(WTF::move(sample), { IntSize(*presentationSize), { *m_videoInfo } });
+        image = frame->copyNativeImage();
+        m_lastPaintedImage = image;
+    }
+    return image;
+}
+#endif
+
 void MediaPlayerPrivateGStreamer::paint(GraphicsContext& context, const FloatRect& rect)
 {
     GST_DEBUG_OBJECT(pipeline(), "Painting video: disabled=%d visible=%d suspended=%d", context.paintingDisabled(), m_pageIsVisible, isSuspended());
@@ -4432,6 +4628,18 @@ void MediaPlayerPrivateGStreamer::paint(GraphicsContext& context, const FloatRec
     if (!m_pageIsVisible || isSuspended())
         return;
 
+#if OS(WINDOWS)
+    // Same as GraphicsContext::drawVideoFrame(), but each frame becomes an image only once.
+    RefPtr image = presentedImage(true);
+    if (!image)
+        return;
+    RasterDrawingOptions options { m_videoSourceOrientation };
+    IntSize size = image->size();
+    if (options.orientation().usesWidthAsHeight())
+        size = size.transposedSize();
+    auto compositeOperator = image->hasAlpha() ? CompositeOperator::SourceOver : CompositeOperator::Copy;
+    context.drawNativeImage(*image, rect, { { }, size }, { options, compositeOperator });
+#else
     // Keep a reference to the sample to avoid keeping the sampleMutex locked, which would be prone
     // to deadlocks if triggerRepaint is called while the video frame converter is blocked on its
     // state change.
@@ -4458,6 +4666,7 @@ void MediaPlayerPrivateGStreamer::paint(GraphicsContext& context, const FloatRec
 
     Ref frame = VideoFrameGStreamer::create(WTF::move(sample), { IntSize(*presentationSize), WTF::move(videoInfo) });
     context.drawVideoFrame(frame, rect, ShouldDiscardAlpha::No, { m_videoSourceOrientation });
+#endif
 }
 
 ColorSpace MediaPlayerPrivateGStreamer::colorSpace()
@@ -5015,13 +5224,19 @@ WTFLogChannel& MediaPlayerPrivateGStreamer::logChannel() const
 std::optional<VideoFrameMetadata> MediaPlayerPrivateGStreamer::videoFrameMetadata()
 {
     Locker sampleLocker { m_sampleMutex };
-    if (!GST_IS_SAMPLE(m_sample.get()))
+#if OS(WINDOWS)
+    // Describe the frame that was last painted (presented), not the newest one the sink received.
+    GRefPtr<GstSample> sample = m_canRenderingBeAccelerated ? m_sample : m_lastPaintedSample;
+#else
+    GRefPtr<GstSample> sample = m_sample;
+#endif
+    if (!GST_IS_SAMPLE(sample.get()))
         return { };
 
     if (m_sampleCount == m_lastVideoFrameMetadataSampleCount)
         return { };
 
-    auto buffer = gst_sample_get_buffer(m_sample.get());
+    auto buffer = gst_sample_get_buffer(sample.get());
     if (!GST_IS_BUFFER(buffer))
         return { };
 
@@ -5037,7 +5252,7 @@ std::optional<VideoFrameMetadata> MediaPlayerPrivateGStreamer::videoFrameMetadat
         if (isMediaStreamPlayer())
             metadata.mediaTime = currentTime().toDouble();
         else {
-            auto segment = gst_sample_get_segment(m_sample.get());
+            auto segment = gst_sample_get_segment(sample.get());
             RELEASE_ASSERT(segment);
             uint64_t streamTime;
             if (int sign = gst_segment_to_stream_time_full(segment, GST_FORMAT_TIME, GST_BUFFER_PTS(buffer), &streamTime))

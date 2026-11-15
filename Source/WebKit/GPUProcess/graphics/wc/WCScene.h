@@ -54,6 +54,9 @@ public:
     ~WCScene();
     void initialize(WCSceneContext&);
     std::optional<UpdateInfo> update(WCUpdateInfo&&);
+    // Presents what the last update() painted to the window, if anything. Called after the web process has
+    // been answered, so a present that waits for the display doesn't hold up its next rendering update.
+    void present();
 
 private:
     struct Layer;
@@ -65,6 +68,7 @@ private:
     WebCore::TextureMapperFPSCounter m_fpsCounter;
     LayerMap m_layers;
     bool m_usesOffscreenRendering;
+    bool m_needsPresent { false };
 };
 
 } // namespace WebKit

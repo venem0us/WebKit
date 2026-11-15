@@ -73,8 +73,16 @@ private:
     // high water level is reached, then it becomes false until the queue drains down to the low water level
     // and the cycle repeats. This way we avoid stalls and minimize context switches.
 
+#if OS(WINDOWS)
+    // The queue is refilled from the main thread. A busy page (Twitch's chat and overlays) can hold the main
+    // thread for longer than 100 ms, and the queue ran dry many times a second while appended data waited.
+    // Holding up to a second leaves the main thread half a second to answer.
+    static const GstClockTime s_durationEnqueuedHighWaterLevel = 1000 * GST_MSECOND;
+    static const GstClockTime s_durationEnqueuedLowWaterLevel = 500 * GST_MSECOND;
+#else
     static const GstClockTime s_durationEnqueuedHighWaterLevel = 200 * GST_MSECOND;
     static const GstClockTime s_durationEnqueuedLowWaterLevel = 100 * GST_MSECOND;
+#endif
 
     GstClockTime durationEnqueued() const;
     void checkLowLevel();

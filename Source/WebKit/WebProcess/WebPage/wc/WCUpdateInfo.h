@@ -30,6 +30,7 @@
 #include "WCBackingStore.h"
 #include "WCContentBufferIdentifier.h"
 #include <WebCore/GraphicsLayer.h>
+#include <WebCore/ShareableBitmap.h>
 #include <WebCore/TextureMapperSparseBackingStore.h>
 #include <optional>
 #include <wtf/OptionSet.h>
@@ -116,6 +117,9 @@ struct WCLayerUpdateInfo {
     struct PlatformLayerChanges {
         bool hasLayer;
         Vector<WCContentBufferIdentifier> identifiers;
+        // A new video frame for a layer whose contents are a video without a platform layer (Windows GStreamer):
+        // the compositor uploads it and draws it into the contents rect, scaling on the GPU.
+        std::optional<WCBackingStore> videoFrame;
     } platformLayer { };
 
     Markable<WebCore::LayerHostingContextIdentifier> hostIdentifier { };

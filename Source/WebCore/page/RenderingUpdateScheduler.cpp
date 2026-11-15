@@ -69,6 +69,12 @@ void RenderingUpdateScheduler::adjustRenderingUpdateFrequency()
         clearScheduled();
         scheduleRenderingUpdate();
     }
+#if PLATFORM(WIN)
+    // Still waiting on the display link, perhaps since before the rate changed (a page leaving the throttled,
+    // visually idle state when its tab is shown again): make sure the link is running, or the update never comes.
+    else if (DisplayRefreshMonitorClient::isScheduled() && !m_useTimer)
+        DisplayRefreshMonitorManager::sharedManager().scheduleAnimation(*this);
+#endif
 }
 
 void RenderingUpdateScheduler::scheduleRenderingUpdate()
@@ -88,7 +94,15 @@ void RenderingUpdateScheduler::scheduleRenderingUpdate()
 
     if (!scheduleAnimation()) {
         LOG_WITH_STREAM(DisplayLink, stream << "RenderingUpdateScheduler::scheduleRenderingUpdate for interval " << protect(m_page)->preferredRenderingUpdateInterval() << " falling back to timer");
-        startTimer(protect(m_page)->preferredRenderingUpdateInterval());
+        auto interval = protect(m_page)->preferredRenderingUpdateInterval();
+#if OS(WINDOWS)
+        // Act like a display clock: fire one interval after the previous update, not one interval after
+        // this request. Otherwise a request made just after an update (a new video frame, say) waits a
+        // whole interval, and updates alternate between one and two intervals apart.
+        auto elapsed = MonotonicTime::now() - m_lastTimerFireTime;
+        interval = elapsed >= interval ? 0_s : interval - elapsed;
+#endif
+        startTimer(interval);
     }
     
     protect(m_page)->didScheduleRenderingUpdate();
@@ -131,7 +145,10 @@ void RenderingUpdateScheduler::displayRefreshFired()
     tracePoint(TriggerRenderingUpdate);
 
     clearScheduled();
-    
+#if OS(WINDOWS)
+    m_lastTimerFireTime = MonotonicTime::now();
+#endif
+
     if (m_page->chrome().client().shouldTriggerRenderingUpdate(m_rescheduledRenderingUpdateCount)) {
         triggerRenderingUpdate();
         m_rescheduledRenderingUpdateCount = 0;

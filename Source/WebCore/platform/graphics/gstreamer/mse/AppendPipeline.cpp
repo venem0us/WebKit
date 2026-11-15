@@ -24,6 +24,9 @@
 #if ENABLE(VIDEO) && USE(GSTREAMER) && ENABLE(MEDIA_SOURCE)
 
 #include "AudioTrackPrivateGStreamer.h"
+#if OS(WINDOWS)
+#include "GStreamerVideoStats.h"
+#endif
 #include "GStreamerCommon.h"
 #include "GStreamerEMEUtilities.h"
 #include "GStreamerMediaDescription.h"
@@ -573,6 +576,10 @@ void AppendPipeline::appsinkNewSample(const Track& track, GRefPtr<GstSample>&& s
         textTrack->handleSample(GRefPtr(mediaSample->sample()));
     }
 
+#if OS(WINDOWS)
+    if (track.streamType == StreamType::Video && GStreamerVideoStats::enabled())
+        GStreamerVideoStats::counters().mseLastVideoAppendUs = GStreamerVideoStats::nowMicroseconds();
+#endif
     if (hasValidPTS)
         m_sourceBufferPrivate.didReceiveSample(WTF::move(mediaSample));
 }

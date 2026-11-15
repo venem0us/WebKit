@@ -370,6 +370,12 @@ void RenderVideo::paintReplaced(PaintInfo& paintInfo, const LayoutPoint& paintOf
 {
     ASSERT(!isSkippedContentRoot(*this));
 
+    // RenderMedia can have children (the controls), so RenderReplaced::paint() calls this in every paint phase, not
+    // just the foreground. Only the foreground draws the video; drawing it in the others repeats a full-frame image
+    // draw several times per page update, which is what limits software-painted video to a fraction of its rate.
+    if (paintInfo.phase != PaintPhase::Foreground)
+        return;
+
     Ref videoElement = this->videoElement();
     Ref page = this->page();
     RefPtr mediaPlayer = videoElement->player();

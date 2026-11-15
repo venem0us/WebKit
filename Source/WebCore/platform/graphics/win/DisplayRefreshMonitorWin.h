@@ -26,24 +26,40 @@
 #pragma once
 
 #include "DisplayRefreshMonitor.h"
-#include <wtf/CanMakeWeakPtr.h>
-#include <wtf/RunLoop.h>
+#include <wtf/Seconds.h>
 
 namespace WebCore {
 
-class DisplayRefreshMonitorWin : public DisplayRefreshMonitor, public CanMakeWeakPtr<DisplayRefreshMonitorWin> {
+class DisplayRefreshMonitorWin : public DisplayRefreshMonitor {
 public:
     static RefPtr<DisplayRefreshMonitorWin> create(PlatformDisplayID);
+    ~DisplayRefreshMonitorWin();
+
+    // Called on any thread when a video frame is handed to the page, so ticks can land just after frames.
+    // Returns the arrival time (MonotonicTime seconds) to pass to noteVideoFrameRepaintRequested().
+    static double noteVideoFrameArrival();
+    // Called on the main thread when the repaint request for the frame that arrived at that time is made.
+    static void noteVideoFrameRepaintRequested(double arrival);
+
+    // Diagnostics for the video stats log: the tick counters since the last call, and the time
+    // (MonotonicTime seconds) the last tick reached the main thread.
+    static void takeTickStats(char* buffer, size_t);
+    static double lastDeliveredTickTime();
+    static void noteNewVideoFramePainted();
+    // Writes the clock's event trace for the last `duration`, one line at a time.
+    static void writeTrace(Seconds duration, void (*writeLine)(const char*));
+
+    class Clock;
 
 private:
     explicit DisplayRefreshMonitorWin(PlatformDisplayID);
 
     bool startNotificationMechanism() final;
     void stopNotificationMechanism() final;
-    
-    void displayLinkCallbackFired();
 
-    RunLoop::Timer m_timer;
+    bool displayLinkCallbackFired(); // Returns whether the tick ran a rendering update.
+
+    RefPtr<Clock> m_clock;
     DisplayUpdate m_currentUpdate;
 };
 

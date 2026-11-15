@@ -30,6 +30,7 @@
 #include "DrawingArea.h"
 #include "GraphicsLayerWC.h"
 #include "RemoteWCLayerTreeHostProxy.h"
+#include "RenderingUpdateStats.h"
 #include "WCLayerFactory.h"
 #include <WebCore/GraphicsLayerFactory.h>
 #include <WebCore/Timer.h>
@@ -109,6 +110,9 @@ private:
     WebCore::IntRect m_scrollRect;
     WebCore::IntSize m_scrollOffset;
     CompletionHandler<void()> m_forceRepaintCompletionHandler;
+#if OS(WINDOWS)
+    RefPtr<RenderingUpdateStats> m_renderingStats { RenderingUpdateStats::createIfEnabled() };
+#endif
 };
 
 } // namespace WebKit

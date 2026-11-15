@@ -45,6 +45,10 @@
 #include <wtf/text/CString.h>
 #include <wtf/text/MakeString.h>
 
+#if OS(WINDOWS)
+#include "GStreamerVideoStats.h"
+#endif
+
 using namespace WTF;
 using namespace WebCore;
 
@@ -531,8 +535,18 @@ static void webKitMediaSrcLoop(void* userData)
     }
 
     GRefPtr<GstMiniObject> object;
+#if OS(WINDOWS)
+    bool isVideoTrack = stream->track->type() == GStreamerTrackType::Video;
+    uint64_t starvedSinceUs = 0;
+#endif
     {
         DataMutexLocker queue { stream->track->queueDataMutex() };
+#if OS(WINDOWS)
+        if (queue->isEmpty() && isVideoTrack && GStreamerVideoStats::enabled()) {
+            ++GStreamerVideoStats::counters().mseStarved;
+            starvedSinceUs = GStreamerVideoStats::nowMicroseconds();
+        }
+#endif
         if (!queue->isEmpty()) {
             object = queue->pop();
             streamingMembers->hasPoppedFirstObject = true;
@@ -554,6 +568,12 @@ static void webKitMediaSrcLoop(void* userData)
     // Wait to receive an object from the queue (if we didn't get one already) or flush.
     while (true) {
         auto timeout = (stream->track->type() == GStreamerTrackType::Video) ? streamingMembers->stillFrameWorkaroundTime : MonotonicTime::infinity();
+#if OS(WINDOWS)
+        // Diagnostics: while a starved video track waits, wake once a second to log long stalls.
+        bool logStarvation = starvedSinceUs && GStreamerVideoStats::enabled();
+        if (logStarvation)
+            timeout = std::min(timeout, MonotonicTime::now() + 1_s);
+#endif
 
         streamingMembers->queueChangedOrFlushedCondition.waitUntil(streamingMembers.mutex(), timeout, [&]() {
             return streamingMembers->isFlushing || object;
@@ -561,6 +581,13 @@ static void webKitMediaSrcLoop(void* userData)
 
         if (streamingMembers->isFlushing || object)
             break;
+#if OS(WINDOWS)
+        if (logStarvation) {
+            GStreamerVideoStats::noteVideoStarved(starvedSinceUs);
+            if (MonotonicTime::now() < streamingMembers->stillFrameWorkaroundTime)
+                continue;
+        }
+#endif
 
         // As of currently (GStreamer 1.28) avdec_* elements don't start a task (thread) in their srcpads, so
         // decoded frames are only propagated downstream when an encoded frame or EOS event is fed
@@ -604,6 +631,11 @@ static void webKitMediaSrcLoop(void* userData)
         streamingMembers->doesNeedSegmentEvent = false;
     }
 
+#if OS(WINDOWS)
+    if (starvedSinceUs && object)
+        GStreamerVideoStats::counters().mseStarveWait.add(GStreamerVideoStats::nowMicroseconds() - starvedSinceUs);
+#endif
+
     if (GST_IS_SAMPLE(object.get())) {
         GRefPtr<GstSample> sample = adoptGRef(GST_SAMPLE(object.leakRef()));
 
@@ -646,6 +678,12 @@ static void webKitMediaSrcLoop(void* userData)
         streamingMembers.unlockEarly();
 
         ASSERT(GST_BUFFER_PTS_IS_VALID(buffer.get()));
+#if OS(WINDOWS)
+        if (isVideoTrack && GStreamerVideoStats::enabled()) {
+            ++GStreamerVideoStats::counters().msePushed;
+            GStreamerVideoStats::counters().mseLastPushedPts = GST_BUFFER_PTS(buffer.get());
+        }
+#endif
         GST_TRACE_OBJECT(pad, "Pushing buffer downstream: %" GST_PTR_FORMAT, buffer.get());
         GstFlowReturn result = gst_pad_push(pad, buffer.leakRef());
         if (result == GST_FLOW_NOT_LINKED && stream->track->type() == GStreamerTrackType::Video) {
@@ -654,8 +692,15 @@ static void webKitMediaSrcLoop(void* userData)
         } else if (result != GST_FLOW_OK && result != GST_FLOW_FLUSHING) {
             gst_pad_pause_task(pad);
             // Do not propagate NoKey decryption errors downstream, the decryptor should already have emitted an appropriate error message.
-            if (!isBufferEncrypted && result != GST_FLOW_CUSTOM_ERROR)
-                GST_ELEMENT_ERROR(stream->source, CORE, PAD, ("Failed to push buffer"), ("gst_pad_push() returned %s", gst_flow_get_name(result)));
+            if (!isBufferEncrypted && result != GST_FLOW_CUSTOM_ERROR) {
+                // Name the track and the element that refused the buffer: downstream elements don't always post an
+                // error of their own, and without this the failure can't be traced to a parser, decoder or sink.
+                GRefPtr<GstPad> peer = adoptGRef(gst_pad_get_peer(pad));
+                GRefPtr<GstElement> peerElement = peer ? adoptGRef(gst_pad_get_parent_element(peer.get())) : nullptr;
+                const char* trackType = gst_stream_type_get_name(gstStreamType(stream->track->type()));
+                GST_ERROR_OBJECT(pad, "gst_pad_push() returned %s on the %s track, peer %" GST_PTR_FORMAT, gst_flow_get_name(result), trackType, peerElement.get());
+                GST_ELEMENT_ERROR(stream->source, CORE, PAD, ("Failed to push buffer"), ("gst_pad_push() returned %s on the %s track (peer %s)", gst_flow_get_name(result), trackType, peerElement ? GST_OBJECT_NAME(peerElement.get()) : "none"));
+            }
         } else if (pushingFirstBuffer) {
             GST_DEBUG_OBJECT(pad, "First buffer on this pad was pushed (ret = %s).", gst_flow_get_name(result));
             dumpPipeline("first-frame-after"_s, stream);

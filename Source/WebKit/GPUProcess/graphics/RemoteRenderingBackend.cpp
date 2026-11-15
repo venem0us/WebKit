@@ -29,6 +29,7 @@
 #if ENABLE(GPU_PROCESS)
 
 #include "BufferIdentifierSet.h"
+#include "GPURenderingStats.h"
 #include "GPUConnectionToWebProcess.h"
 #include "GPUProcess.h"
 #include "GPUProcessProxyMessages.h"
@@ -399,7 +400,15 @@ void RemoteRenderingBackend::createImageBufferWithBackingStore(const FloatSize& 
 {
     assertIsCurrent(workQueue());
 
+#if OS(WINDOWS)
+    std::optional<GPURenderingStats::ScopedTimer> createTimer;
+    if (auto* stats = GPURenderingStats::singletonIfEnabled())
+        createTimer.emplace(&stats->createBuffer);
+#endif
     RefPtr<ImageBuffer> imageBuffer = allocateImageBuffer(logicalSize, renderingMode, purpose, resolutionScale, colorSpace, pixelFormat, { }, WTF::move(backingStore));
+#if OS(WINDOWS)
+    createTimer.reset();
+#endif
     if (!imageBuffer) {
         RELEASE_LOG(RemoteLayerBuffers, "[renderingBackend=%" PRIu64 "] RemoteRenderingBackend::createImageBuffer - failed to allocate image buffer %" PRIu64, m_renderingBackendIdentifier.toUInt64(), identifier.toUInt64());
         // On failure to create a remote image buffer we still create a null display list recorder.
@@ -496,7 +505,15 @@ void RemoteRenderingBackend::cacheNativeImage(ShareableBitmap::Handle&& handle, 
 {
     assertIsCurrent(workQueue());
 
+#if OS(WINDOWS)
+    auto* stats = GPURenderingStats::singletonIfEnabled();
+    GPURenderingStats::ScopedTimer timer(stats ? &stats->receiveImage : nullptr);
+#endif
     auto bitmap = ShareableBitmap::create(WTF::move(handle));
+#if OS(WINDOWS)
+    if (stats && bitmap)
+        stats->receivedBytes += bitmap->sizeInBytes();
+#endif
     if (!bitmap)
         return;
 
@@ -511,6 +528,10 @@ void RemoteRenderingBackend::cacheNativeImage(ShareableBitmap::Handle&& handle, 
 void RemoteRenderingBackend::cacheNativeImageFromSharedNativeImage(RemoteNativeImageReadReference&& reference)
 {
     assertIsCurrent(workQueue());
+#if OS(WINDOWS)
+    auto* stats = GPURenderingStats::singletonIfEnabled();
+    GPURenderingStats::ScopedTimer timer(stats ? &stats->receiveImage : nullptr);
+#endif
     auto identifier = reference.identifier();
     // Another stream connection publishes the image, possibly on this work queue. Wait without blocking the queue.
     auto image = m_sharedResourceCache->readNativeImage(m_streamConnection, WTF::move(reference));
@@ -664,6 +685,12 @@ void RemoteRenderingBackend::releaseMemory()
 #if USE(GRAPHICS_LAYER_WC)
 void RemoteRenderingBackend::flush(IPC::Semaphore&& semaphore)
 {
+#if OS(WINDOWS)
+    if (auto* stats = GPURenderingStats::singletonIfEnabled()) {
+        ++stats->flushes;
+        stats->reportIfDue();
+    }
+#endif
     semaphore.signal();
 }
 #endif
