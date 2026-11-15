@@ -26,7 +26,7 @@
 #include "config.h"
 #include "AuthenticatorTransportService.h"
 
-#if ENABLE(WEB_AUTHN)
+#if ENABLE(WEB_AUTHN) && !PLATFORM(WIN) // Glass: Windows uses webauthn.dll (win/WebAuthenticatorCoordinatorProxyWin.cpp)
 
 #include "CcidService.h"
 #include "HidService.h"

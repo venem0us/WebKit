@@ -370,7 +370,7 @@ public:
     void addSecKeyProxyStore(Ref<SecKeyProxyStore>&&);
 #endif
 
-#if ENABLE(WEB_AUTHN)
+#if ENABLE(WEB_AUTHN) && !PLATFORM(WIN) // Glass: Windows uses webauthn.dll, not WebKit's authenticators
     AuthenticatorManager& authenticatorManager() { return m_authenticatorManager.get(); }
     void setMockWebAuthenticationConfiguration(WebCore::MockWebAuthenticationConfiguration&&);
     VirtualAuthenticatorManager& virtualAuthenticatorManager();
@@ -681,7 +681,7 @@ private:
     Vector<Ref<SecKeyProxyStore>> m_secKeyProxyStores;
 #endif
 
-#if ENABLE(WEB_AUTHN)
+#if ENABLE(WEB_AUTHN) && !PLATFORM(WIN)
     Ref<AuthenticatorManager> m_authenticatorManager;
 #endif
 

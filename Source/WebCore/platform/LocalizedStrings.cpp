@@ -1623,7 +1623,7 @@ String unacceptableTLSCertificate()
 }
 #endif
 
-#if ENABLE(WEB_AUTHN)
+#if ENABLE(WEB_AUTHN) && PLATFORM(COCOA) // Glass: Touch ID prompts use CFString formatting; Apple platforms only
 // On macOS, Touch ID prompt is not guaranteed to show on top of the UI client, and therefore additional
 // information is provided to help users to make decisions.
 String makeCredentialTouchIDPromptTitle(const String& bundleName, const String& domain)

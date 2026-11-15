@@ -28,7 +28,9 @@
 
 #if ENABLE(WEB_AUTHN)
 #include "DigitalCredentialsCoordinatorMessages.h"
+#if !PLATFORM(WIN) // Glass: Apple's identity-document validator; no digital credentials on Windows
 #include "DigitalCredentialsRequestValidatorBridge.h"
+#endif
 #include "Logging.h"
 #include "MessageSenderInlines.h"
 #include "NetworkConnectionToWebProcessMessages.h"
@@ -120,9 +122,16 @@ void DigitalCredentialsCoordinator::showChooserInUIProcess(std::optional<WebCore
 
 ExceptionOr<Vector<std::optional<WebCore::ValidatedDigitalCredentialRequest>>> DigitalCredentialsCoordinator::validateAndParseDigitalCredentialRequests(const SecurityOrigin& topOrigin, const Document& document, const Vector<UnvalidatedDigitalCredentialRequest>& unvalidatedRequests)
 {
+#if PLATFORM(WIN)
+    UNUSED_PARAM(topOrigin);
+    UNUSED_PARAM(document);
+    UNUSED_PARAM(unvalidatedRequests);
+    return Exception { ExceptionCode::NotSupportedError, "Digital credentials aren't supported on Windows."_s };
+#else
     return DigitalCredentials::validateRequests(topOrigin.data(), unvalidatedRequests, [&](const String& message) {
         const_cast<Document&>(document).addConsoleMessage(MessageSource::JS, MessageLevel::Warning, message);
     });
+#endif
 }
 
 void DigitalCredentialsCoordinator::dismissDigitalCredentialsChooser(CompletionHandler<void(bool)>&& completionHandler)
