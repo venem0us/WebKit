@@ -230,7 +230,22 @@ void GStreamerCapturer::setupPipeline()
     gst_element_set_start_time(m_pipeline.get(), GST_CLOCK_TIME_NONE);
 
     registerActivePipeline(m_pipeline);
-    connectSimpleBusMessageCallback(pipeline());
+    // Glass M4d: a pipeline error (on Windows, e.g. MF_E_VIDEO_RECORDING_DEVICE_PREEMPTED when the camera is opened
+    // again elsewhere) used to be only logged: the track stayed "live" but never got another frame. Tell the observers
+    // so the source can end its tracks and the page can ask for the camera again.
+    // The pipeline is identified by address only (no reference: the callback lives on that pipeline's own bus).
+    connectSimpleBusMessageCallback(pipeline(), [weakThis = ThreadSafeWeakPtr { *this }, pipelineAddress = reinterpret_cast<uintptr_t>(m_pipeline.get())](GstMessage* message) {
+        if (GST_MESSAGE_TYPE(message) != GST_MESSAGE_ERROR)
+            return;
+        callOnMainThread([weakThis, pipelineAddress] {
+            RefPtr protectedThis = weakThis.get();
+            if (!protectedThis || reinterpret_cast<uintptr_t>(protectedThis->m_pipeline.get()) != pipelineAddress)
+                return;
+            protectedThis->forEachObserver([](auto& observer) {
+                observer.capturePipelineFailed();
+            });
+        });
+    });
 
     auto source = createSource();
     auto converter = createConverter();

@@ -34,8 +34,16 @@
 #include "NetworkRTCSharedMonitor.h"
 #include "WebRTCMonitorMessages.h"
 #include <WebCore/Timer.h>
+#if OS(WINDOWS)
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <iphlpapi.h>
+#include <vector>
+#pragma comment(lib, "iphlpapi.lib")
+#else
 #include <ifaddrs.h>
 #include <net/if.h>
+#endif
 #include <ranges>
 #include <wtf/Function.h>
 #include <wtf/NeverDestroyed.h>
@@ -56,6 +64,75 @@ namespace WebKit {
 
 #define RTC_RELEASE_LOG(fmt, ...) RELEASE_LOG(Network, "%p - NetworkRTCMonitor::" fmt, this, ##__VA_ARGS__)
 
+#if OS(WINDOWS)
+// Glass M4a: Windows has no getifaddrs(); GetAdaptersAddresses() lists the same interfaces, with each address's
+// on-link prefix length instead of a netmask. Named by the adapter's GUID name, as libwebrtc's own Windows code does.
+static webrtc::AdapterType adapterTypeFromInterfaceType(IFTYPE type)
+{
+    switch (type) {
+    case IF_TYPE_ETHERNET_CSMACD:
+        return webrtc::ADAPTER_TYPE_ETHERNET;
+    case IF_TYPE_IEEE80211:
+        return webrtc::ADAPTER_TYPE_WIFI;
+    case IF_TYPE_SOFTWARE_LOOPBACK:
+        return webrtc::ADAPTER_TYPE_LOOPBACK;
+    case IF_TYPE_PPP:
+    case IF_TYPE_TUNNEL:
+        return webrtc::ADAPTER_TYPE_VPN;
+    case IF_TYPE_WWANPP:
+    case IF_TYPE_WWANPP2:
+        return webrtc::ADAPTER_TYPE_CELLULAR;
+    default:
+        return webrtc::ADAPTER_TYPE_UNKNOWN;
+    }
+}
+
+HashMap<String, RTCNetwork> NetworkRTCMonitor::gatherNetworkMap()
+{
+    const ULONG flags = GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER | GAA_FLAG_SKIP_FRIENDLY_NAME;
+    ULONG size = 16 * 1024;
+    std::vector<uint8_t> buffer;
+    ULONG result = ERROR_BUFFER_OVERFLOW;
+    // The list can grow between the size query and the call, so retry a few times.
+    for (int attempt = 0; attempt < 3 && result == ERROR_BUFFER_OVERFLOW; ++attempt) {
+        buffer.resize(size);
+        result = GetAdaptersAddresses(AF_UNSPEC, flags, nullptr, reinterpret_cast<IP_ADAPTER_ADDRESSES*>(buffer.data()), &size);
+    }
+    if (result != NO_ERROR)
+        return { };
+
+    HashMap<String, RTCNetwork> networkMap;
+    for (auto* adapter = reinterpret_cast<IP_ADAPTER_ADDRESSES*>(buffer.data()); adapter; adapter = adapter->Next) {
+        if (adapter->OperStatus != IfOperStatusUp || !adapter->AdapterName)
+            continue;
+
+        auto name = unsafeSpan(adapter->AdapterName);
+        auto interfaceType = adapterTypeFromInterfaceType(adapter->IfType);
+        for (auto* unicast = adapter->FirstUnicastAddress; unicast; unicast = unicast->Next) {
+            auto* socketAddress = unicast->Address.lpSockaddr;
+            if (!socketAddress || (socketAddress->sa_family != AF_INET && socketAddress->sa_family != AF_INET6))
+                continue;
+
+            RTCNetwork::IPAddress address { *socketAddress };
+            int prefixLength = unicast->OnLinkPrefixLength;
+            RTCNetwork::IPAddress prefix { webrtc::TruncateIP(address.rtcAddress(), prefixLength) };
+
+            int scopeID = 0;
+            if (socketAddress->sa_family == AF_INET6)
+                scopeID = reinterpret_cast<const sockaddr_in6*>(socketAddress)->sin6_scope_id;
+
+            auto prefixString = prefix.rtcAddress().ToString();
+            auto networkKey = makeString(name, "-"_s, prefixLength, "-"_s, std::span { prefixString });
+
+            networkMap.ensure(networkKey, [&] {
+                return RTCNetwork { String::fromLatin1(name), String { networkKey }, prefix, prefixLength, interfaceType, 0, 0, true, false, scopeID, { } };
+            }).iterator->value.ips.append(RTCNetwork::InterfaceAddress { address, webrtc::IPV6_ADDRESS_FLAG_NONE });
+        }
+    }
+
+    return networkMap;
+}
+#else
 static std::optional<std::pair<RTCNetwork::InterfaceAddress, RTCNetwork::IPAddress>> addressFromInterface(const struct ifaddrs& interface)
 {
     RTCNetwork::IPAddress address { *interface.ifa_addr };
@@ -105,6 +182,7 @@ HashMap<String, RTCNetwork> NetworkRTCMonitor::gatherNetworkMap()
 
     return networkMap;
 }
+#endif // OS(WINDOWS)
 
 static bool connectToRemoteAddress(int socket, bool useIPv4)
 {

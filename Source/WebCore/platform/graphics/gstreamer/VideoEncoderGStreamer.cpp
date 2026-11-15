@@ -83,6 +83,9 @@ private:
     const RefPtr<WebKitVideoEncoderBitRateAllocation> m_bitrateAllocation;
     int64_t m_timestamp { 0 };
     std::optional<uint64_t> m_duration;
+    // Glass M4d: input timestamps handed to the encoder element, kept increasing (see encode()).
+    GstClockTime m_lastInputPts { GST_CLOCK_TIME_NONE };
+    GstClockTimeDiff m_inputPtsOffset { 0 };
     bool m_isClosed { false };
     bool m_isInitialized { false };
     const RefPtr<GStreamerElementHarness> m_harness;
@@ -353,6 +356,31 @@ bool GStreamerInternalVideoEncoder::encode(VideoEncoder::RawFrame&& rawFrame, bo
         sample = adoptGRef(gst_sample_make_writable(sample.leakRef()));
         gst_caps_set_simple(caps.get(), "framerate", GST_TYPE_FRACTION, framerateNumerator, framerateDenominator, nullptr);
         gst_sample_set_caps(sample.get(), caps.get());
+    }
+
+    // Glass M4d: frames from a new source (RTCRtpSender.replaceTrack(), a camera turned off and on) carry that
+    // source's own timestamps, which can start again near zero. vp8enc/vp9enc then see time going backwards and
+    // discard every frame, so the far side's picture stops. Keep the input timestamps increasing by shifting the
+    // new source's ones; the encoded frames' timestamps come from m_timestamp, so they're unaffected.
+    if (auto* buffer = gst_sample_get_buffer(sample.get()); buffer && GST_BUFFER_PTS_IS_VALID(buffer)) {
+        auto pts = GST_BUFFER_PTS(buffer);
+        auto adjusted = static_cast<GstClockTimeDiff>(pts) + m_inputPtsOffset;
+        if (GST_CLOCK_TIME_IS_VALID(m_lastInputPts) && adjusted <= static_cast<GstClockTimeDiff>(m_lastInputPts)) {
+            auto next = static_cast<GstClockTimeDiff>(m_lastInputPts + (m_duration ? *m_duration * GST_USECOND : GST_SECOND / 30));
+            GST_DEBUG_OBJECT(m_harness->element(), "Input timestamp went back to %" GST_TIME_FORMAT ", continuing at %" GST_TIME_FORMAT, GST_TIME_ARGS(pts), GST_TIME_ARGS(static_cast<GstClockTime>(next)));
+            m_inputPtsOffset += next - adjusted;
+            adjusted = next;
+        }
+        if (adjusted < 0)
+            adjusted = 0;
+        if (static_cast<GstClockTime>(adjusted) != pts) {
+            sample = adoptGRef(gst_sample_make_writable(sample.leakRef()));
+            GRefPtr writableBuffer = adoptGRef(gst_buffer_make_writable(gst_buffer_ref(gst_sample_get_buffer(sample.get()))));
+            GST_BUFFER_PTS(writableBuffer.get()) = static_cast<GstClockTime>(adjusted);
+            GST_BUFFER_DTS(writableBuffer.get()) = GST_CLOCK_TIME_NONE;
+            gst_sample_set_buffer(sample.get(), writableBuffer.get());
+        }
+        m_lastInputPts = static_cast<GstClockTime>(adjusted);
     }
     return m_harness->pushSample(WTF::move(sample));
 }

@@ -38,7 +38,9 @@
 #include "PlatformMediaDecodingConfiguration.h"
 #include "PlatformMediaEncodingConfiguration.h"
 #include "ProcessQualified.h"
+#if !OS(WINDOWS)
 #include <dlfcn.h>
+#endif
 #include <wtf/TZoneMallocInlines.h>
 
 WTF_IGNORE_WARNINGS_IN_THIRD_PARTY_CODE_BEGIN

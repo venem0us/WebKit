@@ -13,6 +13,7 @@ if (ENABLE_VIDEO OR ENABLE_WEB_AUDIO)
         "${WEBCORE_DIR}/platform/graphics/gstreamer/telemetry"
         "${WEBCORE_DIR}/platform/gstreamer"
         "${WEBCORE_DIR}/platform/mediarecorder/gstreamer"
+        "${WEBCORE_DIR}/platform/mediastream/gstreamer"
     )
 
     list(APPEND WebCore_UNIFIED_SOURCE_LIST_FILES

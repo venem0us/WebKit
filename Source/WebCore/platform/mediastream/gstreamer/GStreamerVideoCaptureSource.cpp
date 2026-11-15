@@ -30,6 +30,7 @@
 #include "GStreamerCommon.h"
 #include "PipeWireCaptureDevice.h"
 #include "PipeWireCaptureDeviceManager.h"
+#include <wtf/NeverDestroyed.h>
 #include <wtf/text/MakeString.h>
 
 namespace WebCore {
@@ -88,8 +89,46 @@ private:
     DisplayCaptureManager& displayCaptureDeviceManager() final { return GStreamerDisplayCaptureDeviceManager::singleton(); }
 };
 
+#if OS(WINDOWS)
+// Glass M4d: Windows (Media Foundation) gives a camera to one capture at a time: opening it again preempts the first
+// capture, whose track then gets no more frames. Like other browsers, share one live capture per camera between all
+// the tracks a document asks for. Shared only within one document (same hash salts), since the source's device ID is
+// hashed with them. A shared source keeps the settings of the request that opened it.
+struct SharedCameraCapture {
+    String deviceID;
+    String persistentSalt;
+    String ephemeralSalt;
+    ThreadSafeWeakPtr<GStreamerVideoCaptureSource> source;
+};
+
+static Vector<SharedCameraCapture>& sharedCameraCaptures()
+{
+    static NeverDestroyed<Vector<SharedCameraCapture>> captures;
+    return captures.get();
+}
+#endif
+
 CaptureSourceOrError GStreamerVideoCaptureSource::create(String&& deviceID, MediaDeviceHashSalts&& hashSalts, const MediaConstraints* constraints)
 {
+#if OS(WINDOWS)
+    ASSERT(isMainThread());
+    auto& shared = sharedCameraCaptures();
+    shared.removeAllMatching([](auto& entry) {
+        RefPtr source = entry.source.get();
+        return !source || source->isEnded();
+    });
+    for (auto& entry : shared) {
+        if (entry.deviceID != deviceID || entry.persistentSalt != hashSalts.persistentDeviceSalt || entry.ephemeralSalt != hashSalts.ephemeralDeviceSalt)
+            continue;
+        if (RefPtr existing = entry.source.get()) {
+            GST_INFO("Sharing the live capture of device %s", deviceID.utf8().data());
+            return CaptureSourceOrError(Ref<RealtimeMediaSource> { existing.releaseNonNull() });
+        }
+    }
+    auto persistentSalt = hashSalts.persistentDeviceSalt;
+    auto ephemeralSalt = hashSalts.ephemeralDeviceSalt;
+#endif
+
     auto device = GStreamerVideoCaptureDeviceManager::singleton().gstreamerDeviceWithUID(deviceID);
     if (!device) {
         auto errorMessage = makeString("GStreamerVideoCaptureSource::create(): GStreamer did not find the device: "_s, deviceID, '.');
@@ -101,6 +140,9 @@ CaptureSourceOrError GStreamerVideoCaptureSource::create(String&& deviceID, Medi
         if (auto result = source->applyConstraints(*constraints))
             return CaptureSourceOrError(CaptureSourceError { result->invalidConstraint });
     }
+#if OS(WINDOWS)
+    shared.append({ deviceID, WTF::move(persistentSalt), WTF::move(ephemeralSalt), ThreadSafeWeakPtr<GStreamerVideoCaptureSource> { source.get() } });
+#endif
     return CaptureSourceOrError(WTF::move(source));
 }
 
@@ -203,6 +245,14 @@ void GStreamerVideoCaptureSource::sourceCapsChanged(const GstCaps* caps)
 void GStreamerVideoCaptureSource::captureEnded()
 {
     m_capturer->stop();
+}
+
+void GStreamerVideoCaptureSource::capturePipelineFailed()
+{
+    if (isEnded() || m_deviceType != CaptureDevice::DeviceType::Camera)
+        return;
+    GST_WARNING("Capture pipeline failed for %s, ending the source", name().utf8().data());
+    captureFailed();
 }
 
 void GStreamerVideoCaptureSource::captureDeviceUpdated(const GStreamerCaptureDevice& device)

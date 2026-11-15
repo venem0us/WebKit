@@ -884,7 +884,9 @@ SocketDispatcher::~SocketDispatcher() {
 
 bool SocketDispatcher::Initialize() {
   RTC_DCHECK(s_ != INVALID_SOCKET);
-#if defined(WEBRTC_WEBKIT_BUILD)
+// Glass M4b: POSIX only. A Windows SOCKET is a handle, not a small descriptor, so it is almost always >= FD_SETSIZE
+// (64 there); Windows waits on sockets with WSAEventSelect, not by descriptor index, so the limit doesn't apply.
+#if defined(WEBRTC_WEBKIT_BUILD) && !defined(WEBRTC_WIN)
   if (s_ < 0 || s_ >= FD_SETSIZE) {
     RTC_LOG_ERR(LS_ERROR) << "SocketDispatcher::Initialize, file descriptor is invalid";
     return false;

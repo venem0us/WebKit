@@ -26,6 +26,8 @@ list(APPEND WTF_SOURCES
 list(APPEND WTF_PUBLIC_HEADERS
     PlatformEnableWin.h
 
+    posix/SocketPOSIX.h
+
     text/win/WCharStringExtras.h
 
     win/DbgHelperWin.h

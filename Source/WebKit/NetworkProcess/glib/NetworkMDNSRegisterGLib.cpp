@@ -128,14 +128,14 @@ void NetworkMDNSRegister::registerMDNSName(WebCore::ScriptExecutionContextIdenti
                 return;
             }
 
-            int interface = -1;
+            int interfaceIndex = -1; // Not "interface": a macro in Windows' combaseapi.h.
             int protocol = -1;
             uint32_t flags = 16; // AVAHI_PUBLISH_NO_REVERSE
 
             auto* cancellable = request->cancellable.get();
             auto requestName = request->name.ascii();
             auto requestAddress = request->address.ascii();
-            g_dbus_proxy_call(dbusProxy.get(), "AddAddress", gVariantNew("(iiuss)", interface, protocol, flags, requestName, requestAddress), G_DBUS_CALL_FLAGS_NONE, -1, cancellable, [](GObject* object, GAsyncResult* result, gpointer userData) {
+            g_dbus_proxy_call(dbusProxy.get(), "AddAddress", gVariantNew("(iiuss)", interfaceIndex, protocol, flags, requestName, requestAddress), G_DBUS_CALL_FLAGS_NONE, -1, cancellable, [](GObject* object, GAsyncResult* result, gpointer userData) {
                 std::unique_ptr<PendingRegistrationRequest> request;
                 request.reset(reinterpret_cast<PendingRegistrationRequest*>(userData));
 

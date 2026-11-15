@@ -79,6 +79,9 @@ void RealtimeOutgoingVideoSource::unobserveSource()
 {
     protect(m_videoSource)->removeObserver(*this);
     protect(m_videoSource->source())->removeVideoFrameObserver(*this);
+    // Glass M4d: the frame observer is gone, so say so. Otherwise replaceTrack() (stop, setSource, start) finds the
+    // flag still set and never observes the new track's frames: the far side's picture stops.
+    m_isObservingVideoFrames = false;
 }
 
 void RealtimeOutgoingVideoSource::startObservingVideoFrames()

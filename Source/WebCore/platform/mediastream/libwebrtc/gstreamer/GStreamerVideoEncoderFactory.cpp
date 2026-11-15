@@ -322,6 +322,14 @@ std::vector<webrtc::SdpVideoFormat> GStreamerVideoEncoderFactory::GetSupportedFo
     if (scanner.isCodecSupported(GStreamerRegistryScanner::Configuration::Encoding, "vp8"_s))
         supportedFormats.push_back(webrtc::SdpVideoFormat::VP8());
 
+#if OS(WINDOWS)
+    // Glass M4d: on Windows only VP8 sends correctly so far. VP9 (LibWebRTC's own libvpx encoder, below) sends a
+    // picture that never changes after the first frame, and the H.264 encoder found in the registry sends nothing.
+    // Offering them makes services such as Jitsi pick VP9 and show a frozen picture; with VP8 alone they use VP8.
+    // Decoding all three stays (GStreamerVideoDecoderFactory).
+    return supportedFormats;
+#endif
+
     if (scanner.isCodecSupported(GStreamerRegistryScanner::Configuration::Encoding, "avc1"_s)) {
         for (auto& format : supportedH264Formats())
             supportedFormats.push_back(WTF::move(format));

@@ -69,42 +69,42 @@ class WEBCORE_EXPORT RealtimeMediaSourceCenter : public ThreadSafeRefCountedAndC
 public:
     ~RealtimeMediaSourceCenter();
 
-    WEBCORE_EXPORT static RealtimeMediaSourceCenter& singleton();
+    static RealtimeMediaSourceCenter& singleton();
 
     struct ValidDevices {
         Vector<CaptureDevice> audioDevices;
         Vector<CaptureDevice> videoDevices;
     };
     using ValidateHandler = CompletionHandler<void(std::expected<ValidDevices, MediaConstraintType>&&)>;
-    WEBCORE_EXPORT void validateRequestConstraints(ValidateHandler&&, const MediaStreamRequest&, MediaDeviceHashSalts&&);
+    void validateRequestConstraints(ValidateHandler&&, const MediaStreamRequest&, MediaDeviceHashSalts&&);
 
     using NewMediaStreamHandler = Function<void(std::expected<Ref<MediaStreamPrivate>, CaptureSourceError>&&)>;
     void createMediaStream(Ref<const Logger>&&, NewMediaStreamHandler&&, MediaDeviceHashSalts&&, CaptureDevice&& audioDevice, CaptureDevice&& videoDevice, const MediaStreamRequest&);
 
-    WEBCORE_EXPORT void getMediaStreamDevices(CompletionHandler<void(Vector<CaptureDevice>&&)>&&);
-    WEBCORE_EXPORT std::optional<RealtimeMediaSourceCapabilities> getCapabilities(const CaptureDevice&);
+    void getMediaStreamDevices(CompletionHandler<void(Vector<CaptureDevice>&&)>&&);
+    std::optional<RealtimeMediaSourceCapabilities> getCapabilities(const CaptureDevice&);
 
-    WEBCORE_EXPORT AudioCaptureFactory& audioCaptureFactory();
-    WEBCORE_EXPORT void NODELETE setAudioCaptureFactory(AudioCaptureFactory&);
-    WEBCORE_EXPORT void NODELETE unsetAudioCaptureFactory(AudioCaptureFactory&);
+    AudioCaptureFactory& audioCaptureFactory();
+    void NODELETE setAudioCaptureFactory(AudioCaptureFactory&);
+    void NODELETE unsetAudioCaptureFactory(AudioCaptureFactory&);
 
-    WEBCORE_EXPORT VideoCaptureFactory& NODELETE videoCaptureFactory();
-    WEBCORE_EXPORT void NODELETE setVideoCaptureFactory(VideoCaptureFactory&);
-    WEBCORE_EXPORT void NODELETE unsetVideoCaptureFactory(VideoCaptureFactory&);
+    VideoCaptureFactory& NODELETE videoCaptureFactory();
+    void NODELETE setVideoCaptureFactory(VideoCaptureFactory&);
+    void NODELETE unsetVideoCaptureFactory(VideoCaptureFactory&);
 
-    WEBCORE_EXPORT DisplayCaptureFactory& NODELETE displayCaptureFactory();
-    WEBCORE_EXPORT void NODELETE setDisplayCaptureFactory(DisplayCaptureFactory&);
-    WEBCORE_EXPORT void NODELETE unsetDisplayCaptureFactory(DisplayCaptureFactory&);
+    DisplayCaptureFactory& NODELETE displayCaptureFactory();
+    void NODELETE setDisplayCaptureFactory(DisplayCaptureFactory&);
+    void NODELETE unsetDisplayCaptureFactory(DisplayCaptureFactory&);
 
-    WEBCORE_EXPORT static String hashStringWithSalt(const String& id, const String& hashSalt);
+    static String hashStringWithSalt(const String& id, const String& hashSalt);
 
-    WEBCORE_EXPORT void addDevicesChangedObserver(RealtimeMediaSourceCenterObserver&);
-    WEBCORE_EXPORT void removeDevicesChangedObserver(RealtimeMediaSourceCenterObserver&);
+    void addDevicesChangedObserver(RealtimeMediaSourceCenterObserver&);
+    void removeDevicesChangedObserver(RealtimeMediaSourceCenterObserver&);
 
     void captureDevicesChanged();
     void captureDeviceWillBeRemoved(const String& persistentId);
 
-    WEBCORE_EXPORT static bool shouldInterruptAudioOnPageVisibilityChange();
+    static bool shouldInterruptAudioOnPageVisibilityChange();
 
 #if ENABLE(APP_PRIVACY_REPORT)
     void setIdentity(OSObjectPtr<tcc_identity_t>&& identity) { m_identity = WTF::move(identity); }
