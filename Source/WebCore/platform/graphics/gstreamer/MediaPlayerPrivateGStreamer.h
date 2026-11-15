@@ -35,6 +35,9 @@
 #include "Logging.h"
 #include "MainThreadNotifier.h"
 #include "MediaPlayerPrivate.h"
+#if OS(WINDOWS)
+#include "MediaPlayerCompositorFrameSink.h"
+#endif
 #include "PlatformLayer.h"
 #include "PlatformMediaResourceLoader.h"
 #include "TrackPrivateBaseGStreamer.h"
@@ -158,7 +161,13 @@ public:
     void setMuted(bool) final;
     MediaPlayer::NetworkState networkState() const final;
     MediaPlayer::ReadyState readyState() const final;
-    void setPageIsVisible(bool visible) final { m_pageIsVisible = visible; }
+    void setPageIsVisible(bool visible) final
+    {
+        m_pageIsVisible = visible;
+#if OS(WINDOWS)
+        m_pageIsVisibleForSink = visible;
+#endif
+    }
     void setViewportVisibility(ViewportVisibility) final;
     void setPresentationSize(const IntSize&) final;
     MediaTime duration() const override;
@@ -196,6 +205,7 @@ public:
 #elif OS(WINDOWS)
     bool supportsAcceleratedRendering() const override;
     RefPtr<NativeImage> imageForCompositing() override;
+    void setCompositorFrameSink(RefPtr<MediaPlayerCompositorFrameSink>&&) override;
 #endif
 
 #if ENABLE(ENCRYPTED_MEDIA)
@@ -711,6 +721,13 @@ private:
     GRefPtr<GstSample> m_sampleForPaint WTF_GUARDED_BY_LOCK(m_sampleMutex);
     double m_sampleArrivalTime WTF_GUARDED_BY_LOCK(m_sampleMutex) { 0 }; // when m_sample arrived (MonotonicTime seconds)
     RefPtr<NativeImage> presentedImage(bool isPainting);
+    // With accelerated compositing, frames go from the sink thread straight to the compositor through this sink
+    // (set by the video's compositing layer); a frame sent this way is presented without a main-thread repaint.
+    bool pushFrameToCompositor(GstSample*);
+    Lock m_compositorFrameSinkLock;
+    RefPtr<MediaPlayerCompositorFrameSink> m_compositorFrameSink WTF_GUARDED_BY_LOCK(m_compositorFrameSinkLock);
+    std::atomic<bool> m_framesGoToCompositor { false }; // the last frame went through the sink: repaint() skips the element repaint
+    std::atomic<bool> m_pageIsVisibleForSink { false };
 #endif
     mutable PlatformTimeRanges m_buffered;
 #if !RELEASE_LOG_DISABLED

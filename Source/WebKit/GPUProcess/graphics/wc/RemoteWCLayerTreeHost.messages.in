@@ -29,6 +29,9 @@
 ]
 messages -> RemoteWCLayerTreeHost {
     Update(struct WebKit::WCUpdateInfo updateInfo) -> (std::optional<WebKit::UpdateInfo> updateInfo)
+#if OS(WINDOWS)
+    UpdateVideoFrame(WebCore::PlatformLayerIdentifier layer, WebKit::WCBackingStore frame)
+#endif
 }
 
 #endif // USE(GRAPHICS_LAYER_WC)

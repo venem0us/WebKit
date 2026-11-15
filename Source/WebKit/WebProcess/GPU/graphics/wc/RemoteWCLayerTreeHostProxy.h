@@ -32,6 +32,8 @@
 #include "MessageSender.h"
 #include "UpdateInfo.h"
 #include "WCLayerTreeHostIdentifier.h"
+#include <WebCore/MediaPlayerCompositorFrameSink.h>
+#include <WebCore/PlatformLayerIdentifier.h>
 #include <wtf/TZoneMalloc.h>
 #include <wtf/WeakRef.h>
 
@@ -49,6 +51,11 @@ public:
     ~RemoteWCLayerTreeHostProxy();
 
     void update(WCUpdateInfo&&, CompletionHandler<void(std::optional<WebKit::UpdateInfo>)>&&);
+#if ENABLE(VIDEO) && OS(WINDOWS)
+    // A sink a video player's thread sends the frames of the video in `layer` to, straight to the GPU process
+    // (UpdateVideoFrame), or null where that's not possible (offscreen rendering, or turned off).
+    RefPtr<WebCore::MediaPlayerCompositorFrameSink> createVideoFrameSink(WebCore::PlatformLayerIdentifier layer);
+#endif
 
     WTF_ABSTRACT_THREAD_SAFE_REF_COUNTED_AND_CAN_MAKE_WEAK_PTR_IMPL;
 

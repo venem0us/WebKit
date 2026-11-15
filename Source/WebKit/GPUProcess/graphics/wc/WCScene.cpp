@@ -232,20 +232,8 @@ std::optional<UpdateInfo> WCScene::update(WCUpdateInfo&& update)
                 layer->texmapLayer.setContentsLayer(nullptr);
                 layer->videoFrame = nullptr;
             } else if (layerUpdate.platformLayer.videoFrame) {
-                RefPtr bitmap = layerUpdate.platformLayer.videoFrame->bitmap();
-                RefPtr image = bitmap ? WebCore::NativeImage::create(bitmap->createPlatformImage(WebCore::BackingStoreCopy::DontCopyBackingStore)) : nullptr;
-                if (image) {
-#if OS(WINDOWS)
-                    auto* stats = GPURenderingStats::singletonIfEnabled();
-                    GPURenderingStats::ScopedTimer timer(stats ? &stats->videoUpload : nullptr);
-#endif
-                    if (!layer->videoFrame)
-                        layer->videoFrame = makeUnique<WebCore::TextureMapperSparseBackingStore>();
-                    auto size = bitmap->size();
-                    layer->videoFrame->setSize(size);
-                    layer->videoFrame->updateContents({ }, *image, { { }, size });
-                    layer->texmapLayer.setContentsLayer(layer->videoFrame.get());
-                }
+                if (RefPtr bitmap = layerUpdate.platformLayer.videoFrame->bitmap())
+                    uploadVideoFrame(*layer, *bitmap);
             } else if (!layer->videoFrame) {
                 WCContentBuffer* contentBuffer = nullptr;
                 for (auto identifier : layerUpdate.platformLayer.identifiers)
@@ -271,11 +259,33 @@ std::optional<UpdateInfo> WCScene::update(WCUpdateInfo&& update)
         }
     }
 
-    for (auto id : update.removedLayers)
+    for (auto id : update.removedLayers) {
         m_layers.remove(id);
+#if OS(WINDOWS)
+        m_pendingVideoFrames.remove(id);
+#endif
+    }
+#if OS(WINDOWS)
+    if (!m_pendingVideoFrames.isEmpty()) {
+        Vector<WebCore::PlatformLayerIdentifier> applied;
+        for (auto& [id, bitmap] : m_pendingVideoFrames) {
+            if (auto* layer = m_layers.get(id)) {
+                uploadVideoFrame(*layer, *bitmap);
+                applied.append(id);
+            }
+        }
+        for (auto id : applied)
+            m_pendingVideoFrames.remove(id);
+    }
+#endif
 
     auto rootLayer = &m_layers.get(*update.rootLayer)->texmapLayer;
     rootLayer->applyAnimationsRecursively(MonotonicTime::now());
+#if OS(WINDOWS)
+    m_lastRootLayer = update.rootLayer;
+    m_lastViewport = update.viewport;
+    m_lastUpdateWasOnScreen = !update.remoteContextHostedIdentifier && !m_usesOffscreenRendering;
+#endif
 
     WebCore::BitmapTexture* surface = nullptr;
     RefPtr<WebCore::BitmapTexture> texture;
@@ -330,6 +340,60 @@ std::optional<UpdateInfo> WCScene::update(WCUpdateInfo&& update)
         m_needsPresent = true;
     return result;
 }
+
+void WCScene::uploadVideoFrame(Layer& layer, const WebCore::ShareableBitmap& bitmap)
+{
+    RefPtr image = WebCore::NativeImage::create(const_cast<WebCore::ShareableBitmap&>(bitmap).createPlatformImage(WebCore::BackingStoreCopy::DontCopyBackingStore));
+    if (!image)
+        return;
+#if OS(WINDOWS)
+    auto* stats = GPURenderingStats::singletonIfEnabled();
+    GPURenderingStats::ScopedTimer timer(stats ? &stats->videoUpload : nullptr);
+#endif
+    if (!layer.videoFrame)
+        layer.videoFrame = makeUnique<WebCore::TextureMapperSparseBackingStore>();
+    auto size = bitmap.size();
+    layer.videoFrame->setSize(size);
+    layer.videoFrame->updateContents({ }, *image, { { }, size });
+    layer.texmapLayer.setContentsLayer(layer.videoFrame.get());
+}
+
+#if OS(WINDOWS)
+bool WCScene::updateVideoFrame(WebCore::PlatformLayerIdentifier identifier, const WebCore::ShareableBitmap& bitmap)
+{
+    auto* layer = m_layers.get(identifier);
+    if (!layer) {
+        if (m_pendingVideoFrames.size() >= 8)
+            m_pendingVideoFrames.clear();
+        m_pendingVideoFrames.set(identifier, RefPtr { const_cast<WebCore::ShareableBitmap*>(&bitmap) });
+        return false;
+    }
+    if (!m_lastUpdateWasOnScreen || !m_lastRootLayer)
+        return false;
+    auto* root = m_layers.get(*m_lastRootLayer);
+    if (!root || !m_context->makeContextCurrent())
+        return false;
+    auto* stats = GPURenderingStats::singletonIfEnabled();
+    GPURenderingStats::ScopedTimer compositeTimer(stats ? &stats->composite : nullptr);
+    m_textureMapper->releaseUnusedTexturesNow();
+    uploadVideoFrame(*layer, bitmap);
+
+    auto& rootLayer = root->texmapLayer;
+    rootLayer.applyAnimationsRecursively(MonotonicTime::now());
+    glViewport(0, 0, m_lastViewport.width(), m_lastViewport.height());
+    {
+        std::optional<GPURenderingStats::ScopedTimer> paintTimer;
+        if (stats)
+            paintTimer.emplace(&stats->paint);
+        m_textureMapper->beginPainting(WebCore::TextureMapper::FlipY::No, nullptr);
+        rootLayer.paint(*m_textureMapper);
+        m_fpsCounter.updateFPSAndDisplay(*m_textureMapper);
+        m_textureMapper->endPainting();
+    }
+    m_needsPresent = true;
+    return true;
+}
+#endif
 
 void WCScene::present()
 {
