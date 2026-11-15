@@ -124,15 +124,20 @@ bool compareStyleablePositionsInDocumentTreeOrder(const Styleable& a, const Styl
 
     if (aReferenceElement.ptr() == bReferenceElement.ptr()) {
         if (isNamedViewTransitionPseudoElement(a.pseudoElementIdentifier) && isNamedViewTransitionPseudoElement(b.pseudoElementIdentifier) && a.pseudoElementIdentifier->nameOrPart != b.pseudoElementIdentifier->nameOrPart) {
-            auto* activeViewTransition = aReferenceElement->document().activeViewTransition();
-            ASSERT(activeViewTransition);
-            for (auto& key : activeViewTransition->namedElements().keys()) {
-                if (key == a.pseudoElementIdentifier->nameOrPart)
-                    return true;
-                if (key == b.pseudoElementIdentifier->nameOrPart)
-                    return false;
+            // The view transition can be gone (it ended, or a new navigation skipped it) while animations of its
+            // pseudo-elements are still being sorted: then any consistent order will do. Dereferencing the null
+            // transition crashed the web process when YouTube switched videos (it animates the switch with a view
+            // transition).
+            if (auto* activeViewTransition = aReferenceElement->document().activeViewTransition()) {
+                for (auto& key : activeViewTransition->namedElements().keys()) {
+                    if (key == a.pseudoElementIdentifier->nameOrPart)
+                        return true;
+                    if (key == b.pseudoElementIdentifier->nameOrPart)
+                        return false;
+                }
+                return false;
             }
-            return false;
+            return codePointCompareLessThan(a.pseudoElementIdentifier->nameOrPart.string(), b.pseudoElementIdentifier->nameOrPart.string());
         }
 
         auto aSortingIndex = sortingIndex(a.pseudoElementIdentifier);
