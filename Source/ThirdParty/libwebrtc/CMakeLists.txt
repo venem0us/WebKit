@@ -35,6 +35,8 @@ endif ()
 add_compile_options("$<$<COMPILE_LANGUAGE:OBJC,OBJCXX>:-fobjc-arc>")
 
 if (NOT APPLE)
+    # Glass M0: libevent and ALSA are not used on Windows.
+    if (NOT WIN32)
     find_package(LibEvent)
     if (NOT LIBEVENT_FOUND)
         message(FATAL_ERROR "libevent is needed for USE_LIBWEBRTC.")
@@ -43,6 +45,7 @@ if (NOT APPLE)
     find_package(AlsaLib)
     if (NOT ALSALIB_FOUND)
         message(FATAL_ERROR "alsa-lib is needed for USE_LIBWEBRTC.")
+    endif ()
     endif ()
 
     find_package(LibOpus 1.1)
@@ -1617,7 +1620,9 @@ if (APPLE)
 endif ()
 
 if (WIN32)
-    list(APPEND websrc_SOURCES
+    list(APPEND webrtc_SOURCES
+        Source/third_party/abseil-cpp/absl/synchronization/internal/win32_waiter.cc
+        Source/third_party/abseil-cpp/absl/time/internal/cctz/src/time_zone_name_win.cc
         Source/webrtc/modules/audio_device/win/audio_device_core_win.cc
         Source/webrtc/modules/audio_device/win/audio_device_module_win.cc
         Source/webrtc/modules/audio_device/win/core_audio_base_win.cc
@@ -2528,6 +2533,14 @@ else ()
     endif ()
 endif ()
 
+if (WIN32)
+    # Glass M0: drop the Linux-only audio and CPU-detection sources.
+    list(FILTER webrtc_SOURCES EXCLUDE REGEX "_linux\\.cc$")
+    # POSIX-only network helper, and libwebrtc's own DirectShow camera capture
+    # (WebKit captures through GStreamer instead).
+    list(FILTER webrtc_SOURCES EXCLUDE REGEX "rtc_base/ifaddrs_converter\\.cc$|modules/video_capture/windows/|modules/video_capture/video_capture_options\\.cc$")
+endif ()
+
 if (APPLE)
     list(REMOVE_ITEM webrtc_SOURCES ${webrtc_SOURCES_NOT_IN_XCODE})
     add_library(webrtc SHARED ${webrtc_SOURCES})
@@ -2573,7 +2586,7 @@ target_compile_definitions(webrtc PRIVATE
   JSON_USE_EXCEPTION=0
   NON_WINDOWS_DEFINE
   NO_MAIN_THREAD_WRAPPING
-  OPENSSL_ASM
+  $<$<NOT:$<BOOL:${WIN32}>>:OPENSSL_ASM>
   $<$<STREQUAL:${PORT},Cocoa>:OPENSSL_SMALL>
   OPUS_BUILD
   OPUS_EXPORT=
@@ -2593,7 +2606,7 @@ target_compile_definitions(webrtc PRIVATE
   WEBRTC_OPUS_SUPPORT_120MS_PTIME=0
   WEBRTC_OPUS_VARIABLE_COMPLEXITY=0
   WEBRTC_USE_BUILTIN_OPUS=1
-  WEBRTC_POSIX
+  $<$<NOT:$<BOOL:${WIN32}>>:WEBRTC_POSIX>
   WEBRTC_USE_BUILTIN_ISAC_FIX=1
   WEBRTC_USE_BUILTIN_ISAC_FLOAT=0
   WEBRTC_USE_H265=1
@@ -2601,7 +2614,7 @@ target_compile_definitions(webrtc PRIVATE
   RTC_ENABLE_H265
   WTF_USE_DYNAMIC_ANNOTATIONS=1
   _GNU_SOURCE
-  HWAES
+  $<$<NOT:$<BOOL:${WIN32}>>:HWAES>
 )
 
 if (ENABLE_AV1)
@@ -2635,6 +2648,54 @@ if (APPLE)
         target_compile_definitions(webrtc PRIVATE WEBRTC_INCLUDE_INTERNAL_AUDIO_DEVICE)
     else ()
         target_compile_definitions(webrtc PRIVATE WEBRTC_IOS)
+    endif ()
+elseif (WIN32)
+    # Glass M0: Windows flavour instead of the Linux one.
+    target_compile_definitions(webrtc PRIVATE
+        NOMINMAX
+        SCTP_PROCESS_LEVEL_LOCKS
+        SCTP_SIMPLE_ALLOCATOR
+        SCTP_USE_OPENSSL_SHA1
+        WEBRTC_WIN
+        WIN32_LEAN_AND_MEAN
+        _USE_MATH_DEFINES
+        __Userspace__
+        __Userspace_os_Windows
+    )
+    # Glass M4a: BoringSSL's x86-64 assembly for Windows. The checked-in gen/*-win.asm files are NASM
+    # (the .S copies above assemble to nothing on Windows); they rename their symbols with the
+    # prefix include in gen/ when BORINGSSL_PREFIX is defined, like the C code does.
+    if (WTF_CPU_X86_64)
+        set(_boringssl_gen Source/third_party/boringssl/src/gen)
+        set(boringssl_NASM_SOURCES
+            ${_boringssl_gen}/bcm/aes-gcm-avx2-x86_64-win.asm
+            ${_boringssl_gen}/bcm/aes-gcm-avx512-x86_64-win.asm
+            ${_boringssl_gen}/bcm/aesni-gcm-x86_64-win.asm
+            ${_boringssl_gen}/bcm/aesni-x86_64-win.asm
+            ${_boringssl_gen}/bcm/ghash-ssse3-x86_64-win.asm
+            ${_boringssl_gen}/bcm/ghash-x86_64-win.asm
+            ${_boringssl_gen}/bcm/p256-x86_64-asm-win.asm
+            ${_boringssl_gen}/bcm/p256_beeu-x86_64-asm-win.asm
+            ${_boringssl_gen}/bcm/rdrand-x86_64-win.asm
+            ${_boringssl_gen}/bcm/rsaz-avx2-win.asm
+            ${_boringssl_gen}/bcm/sha1-x86_64-win.asm
+            ${_boringssl_gen}/bcm/sha256-x86_64-win.asm
+            ${_boringssl_gen}/bcm/sha512-x86_64-win.asm
+            ${_boringssl_gen}/bcm/vpaes-x86_64-win.asm
+            ${_boringssl_gen}/bcm/x86_64-mont-win.asm
+            ${_boringssl_gen}/bcm/x86_64-mont5-win.asm
+            ${_boringssl_gen}/crypto/aes128gcmsiv-x86_64-win.asm
+            ${_boringssl_gen}/crypto/chacha-x86_64-win.asm
+            ${_boringssl_gen}/crypto/chacha20_poly1305_x86_64-win.asm
+            ${_boringssl_gen}/crypto/md5-x86_64-win.asm
+        )
+        set_source_files_properties(${boringssl_NASM_SOURCES} PROPERTIES LANGUAGE ASM_NASM)
+        add_library(boringssl_nasm OBJECT ${boringssl_NASM_SOURCES})
+        target_include_directories(boringssl_nasm PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/${_boringssl_gen})
+        if (BORINGSSL_PREFIX)
+            target_compile_definitions(boringssl_nasm PRIVATE BORINGSSL_PREFIX=${BORINGSSL_PREFIX})
+        endif ()
+        target_sources(webrtc PRIVATE $<TARGET_OBJECTS:boringssl_nasm>)
     endif ()
 else ()
     target_compile_definitions(webrtc PRIVATE
@@ -2714,6 +2775,12 @@ if (APPLE)
         target_link_libraries(webrtc aom dav1d)
     endif ()
 else ()
+    if (WIN32)
+        # Glass M0: no system libvpx headers on Windows; use the bundled ones.
+        list(APPEND webrtc_INCLUDE_DIRECTORIES PRIVATE
+            Source/third_party/libvpx/source/libvpx
+        )
+    endif ()
     target_link_libraries(webrtc ${LIBEVENT_LIBRARY})
     target_link_libraries(webrtc ${LIBOPUS_LIBRARY})
 endif ()
@@ -2782,13 +2849,11 @@ add_library(libsrtp OBJECT ${libsrtp_SOURCES})
 
 target_compile_definitions(libsrtp PRIVATE
     GCM
-    HAVE_ARPA_INET_H
     HAVE_CONFIG_H
     HAVE_INT16_T
     HAVE_INT32_T
     HAVE_INT8_T
     HAVE_INTTYPES_H
-    HAVE_NETINET_IN_H
     HAVE_STDINT_H
     HAVE_STDLIB_H
     HAVE_STRING_H
@@ -2797,11 +2862,16 @@ target_compile_definitions(libsrtp PRIVATE
     HAVE_UINT32_T
     HAVE_UINT64_T
     HAVE_UINT8_T
-    HAVE_UNISTD_H
     OPENSSL
     PACKAGE_STRING="libsrtp2 2.1.0-pre"
     PACKAGE_VERSION="2.1.0-pre"
 )
+# Glass M0: Windows has winsock2.h instead of the BSD socket headers.
+if (WIN32)
+    target_compile_definitions(libsrtp PRIVATE HAVE_WINSOCK2_H NOMINMAX WIN32_LEAN_AND_MEAN)
+else ()
+    target_compile_definitions(libsrtp PRIVATE HAVE_ARPA_INET_H HAVE_NETINET_IN_H HAVE_UNISTD_H)
+endif ()
 
 if (BORINGSSL_PREFIX)
     target_compile_definitions(libsrtp PRIVATE BORINGSSL_PREFIX=${BORINGSSL_PREFIX})
@@ -3501,6 +3571,13 @@ if (WTF_CPU_X86_64)
         Source/third_party/libvpx/source/libvpx/vpx_dsp/x86/vpx_subpixel_bilinear_ssse3.asm
     )
 
+    if (WIN32)
+        # Glass M0: Win64-only helper the Windows libvpx configuration calls.
+        list(APPEND vpx_ASSEMBLY_SOURCES
+            Source/third_party/libvpx/source/libvpx/vpx_ports/float_control_word.asm
+        )
+    endif ()
+
     if (NOT APPLE)
         set_source_files_properties(${vpx_ASSEMBLY_SOURCES} PROPERTIES LANGUAGE ASM_NASM)
     endif ()
@@ -3631,7 +3708,15 @@ if (APPLE)
         )
     endif ()
 else ()
-    if (WTF_CPU_X86_64)
+    if (WTF_CPU_X86_64 AND WIN32)
+        # Glass M0: libvpx ships a Windows configuration.
+        list(APPEND vpx_INCLUDE_DIRECTORIES
+            Source/third_party/libvpx/source/config/win/x64
+        )
+        list(APPEND vpx_SOURCES
+            Source/third_party/libvpx/source/config/win/x64/vpx_config.c
+        )
+    elseif (WTF_CPU_X86_64)
         list(APPEND vpx_INCLUDE_DIRECTORIES
             Source/third_party/libvpx/source/config/linux/x64
         )

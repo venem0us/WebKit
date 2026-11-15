@@ -172,15 +172,15 @@ public:
 
     double fitnessScore() const { return m_fitnessScore; }
 
-    WEBCORE_EXPORT void addObserver(RealtimeMediaSourceObserver&);
-    WEBCORE_EXPORT void removeObserver(RealtimeMediaSourceObserver&);
+    void addObserver(RealtimeMediaSourceObserver&);
+    void removeObserver(RealtimeMediaSourceObserver&);
 
-    WEBCORE_EXPORT void addAudioSampleObserver(AudioSampleObserver&);
-    WEBCORE_EXPORT void removeAudioSampleObserver(AudioSampleObserver&);
+    void addAudioSampleObserver(AudioSampleObserver&);
+    void removeAudioSampleObserver(AudioSampleObserver&);
 
-    WEBCORE_EXPORT void addVideoFrameObserver(VideoFrameObserver&);
-    WEBCORE_EXPORT void addVideoFrameObserver(VideoFrameObserver&, IntSize, double);
-    WEBCORE_EXPORT void removeVideoFrameObserver(VideoFrameObserver&);
+    void addVideoFrameObserver(VideoFrameObserver&);
+    void addVideoFrameObserver(VideoFrameObserver&, IntSize, double);
+    void removeVideoFrameObserver(VideoFrameObserver&);
 
     virtual const IntSize size() const;
     void setSize(const IntSize&);
@@ -249,7 +249,7 @@ public:
 
         bool hasConstraints() const { return !!width || !!height || !!frameRate || !!zoom; }
     };
-    WEBCORE_EXPORT VideoPresetConstraints extractVideoPresetConstraints(const MediaConstraints&);
+    VideoPresetConstraints extractVideoPresetConstraints(const MediaConstraints&);
 
     std::optional<MediaConstraintType> hasAnyInvalidConstraint(const MediaConstraints&);
     bool supportsConstraint(MediaConstraintType);
@@ -257,8 +257,8 @@ public:
     virtual bool isMockSource() const { return false; }
     virtual bool isCaptureSource() const { return false; }
     virtual CaptureDevice::DeviceType deviceType() const { return CaptureDevice::DeviceType::Unknown; }
-    WEBCORE_EXPORT virtual VideoFrameRotation videoFrameRotation() const;
-    WEBCORE_EXPORT virtual IntSize computeResizedVideoFrameSize(IntSize desiredSize, IntSize actualSize);
+    virtual VideoFrameRotation videoFrameRotation() const;
+    virtual IntSize computeResizedVideoFrameSize(IntSize desiredSize, IntSize actualSize);
 
     virtual void monitorOrientation(OrientationNotifier&) { }
 

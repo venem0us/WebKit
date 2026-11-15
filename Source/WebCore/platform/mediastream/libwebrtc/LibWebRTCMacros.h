@@ -41,7 +41,12 @@
 #endif
 
 #define WEBRTC_WEBKIT_BUILD 1
+#if OS(WINDOWS)
+// Glass M0: libwebrtc's Windows flavour.
+#define WEBRTC_WIN 1
+#else
 #define WEBRTC_POSIX 1
+#endif
 #define _COMMON_INCLUDED_
 
 #define WEBRTC_NON_STATIC_TRACE_EVENT_HANDLERS 0

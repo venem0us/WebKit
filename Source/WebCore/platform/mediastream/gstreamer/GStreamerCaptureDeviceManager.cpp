@@ -39,13 +39,20 @@ GST_DEBUG_CATEGORY(webkitGStreamerCaptureDeviceManagerDebugCategory);
 static bool audioCaptureSingletonInitialized = false;
 static bool videoCaptureSingletonInitialized = false;
 
+// PipeWire and PulseAudio devices say "is-default"; Windows' WASAPI devices say "device.default".
+static bool isDefaultDevice(const GstStructure* properties)
+{
+    return gstStructureGet<bool>(properties, "is-default"_s).value_or(false)
+        || gstStructureGet<bool>(properties, "device.default"_s).value_or(false);
+}
+
 static gint sortDevices(gconstpointer a, gconstpointer b)
 {
     GstDevice* adev = GST_DEVICE(a), *bdev = GST_DEVICE(b);
     GUniquePtr<GstStructure> aprops(gst_device_get_properties(adev));
     GUniquePtr<GstStructure> bprops(gst_device_get_properties(bdev));
-    auto aIsDefault = gstStructureGet<bool>(aprops.get(), "is-default"_s).value_or(false);
-    auto bIsDefault = gstStructureGet<bool>(bprops.get(), "is-default"_s).value_or(false);
+    auto aIsDefault = isDefaultDevice(aprops.get());
+    auto bIsDefault = isDefaultDevice(bprops.get());
 
     if (aIsDefault == bIsDefault) {
         auto aName = GMallocString::unsafeAdoptFromUTF8(gst_device_get_display_name(adev));
@@ -205,15 +212,19 @@ std::optional<GStreamerCaptureDevice> GStreamerCaptureDeviceManager::captureDevi
 
     auto types = deviceTypes();
     auto deviceClass = GMallocString::unsafeAdoptFromUTF8(gst_device_get_device_class(device.get()));
+    // Device classes are '/'-separated words in no fixed order: Media Foundation cameras on Windows are
+    // "Source/Video", PipeWire and V4L2 ones "Video/Source". gst_device_has_classes() ignores the order.
     CaptureDevice::DeviceType type;
-    if (startsWith(deviceClass.span(), "Audio"_s)) {
-        if (types.contains(CaptureDevice::DeviceType::Microphone) && endsWith(deviceClass.span(), "Source"_s))
-            type = CaptureDevice::DeviceType::Microphone;
-        else if (types.contains(CaptureDevice::DeviceType::Speaker) && endsWith(deviceClass.span(), "Sink"_s))
-            type = CaptureDevice::DeviceType::Speaker;
-        else
+    if (types.contains(CaptureDevice::DeviceType::Microphone) && gst_device_has_classes(device.get(), "Audio/Source")) {
+        // WASAPI also lists every output's loopback (what the speakers play) as an Audio/Source; that isn't a
+        // microphone, and handing it to a page would let it hear everything the computer plays.
+        if (gstStructureGet<bool>(properties.get(), "wasapi2.device.loopback"_s).value_or(false))
             return { };
-    } else if (types.contains(CaptureDevice::DeviceType::Camera) && startsWith(deviceClass.span(), "Video"_s))
+        type = CaptureDevice::DeviceType::Microphone;
+    }
+    else if (types.contains(CaptureDevice::DeviceType::Speaker) && gst_device_has_classes(device.get(), "Audio/Sink"))
+        type = CaptureDevice::DeviceType::Speaker;
+    else if (types.contains(CaptureDevice::DeviceType::Camera) && gst_device_has_classes(device.get(), "Video/Source"))
         type = CaptureDevice::DeviceType::Camera;
     else
         return { };
@@ -221,7 +232,7 @@ std::optional<GStreamerCaptureDevice> GStreamerCaptureDeviceManager::captureDevi
     // This isn't really a UID but should be good enough (libwebrtc
     // itself does that at least for pulseaudio devices).
     auto deviceName = GMallocString::unsafeAdoptFromUTF8(gst_device_get_display_name(device.get()));
-    auto isDefault = gstStructureGet<bool>(properties.get(), "is-default"_s).value_or(false);
+    auto isDefault = isDefaultDevice(properties.get());
     auto label = makeString(isDefault ? "default: "_s : ""_s, deviceName.span());
 
     auto nodeName = gstStructureGetString(properties.get(), "node.name"_s);
@@ -279,7 +290,7 @@ void GStreamerCaptureDeviceManager::updateDevice(GRefPtr<GstDevice>&& gstDevice,
 {
     GUniquePtr<GstStructure> oldProperties(gst_device_get_properties(oldGstDevice.get()));
     GST_DEBUG_OBJECT(m_deviceMonitor.get(), "Old props: %" GST_PTR_FORMAT, oldProperties.get());
-    auto wasDefault = gstStructureGet<bool>(oldProperties.get(), "is-default"_s).value_or(false);
+    auto wasDefault = isDefaultDevice(oldProperties.get());
     if (wasDefault) {
         auto oldGstCaptureDevice = captureDeviceFromGstDevice(GRefPtr(oldGstDevice));
         if (!oldGstCaptureDevice)
@@ -295,7 +306,7 @@ void GStreamerCaptureDeviceManager::updateDevice(GRefPtr<GstDevice>&& gstDevice,
 
     GUniquePtr<GstStructure> properties(gst_device_get_properties(gstDevice.get()));
     GST_DEBUG_OBJECT(m_deviceMonitor.get(), "New props: %" GST_PTR_FORMAT, properties.get());
-    auto isDefault = gstStructureGet<bool>(properties.get(), "is-default"_s).value_or(false);
+    auto isDefault = isDefaultDevice(properties.get());
     if (isDefault && m_defaultCapturer) {
         auto gstCaptureDevice = captureDeviceFromGstDevice(GRefPtr(gstDevice));
         if (!gstCaptureDevice)

@@ -44,6 +44,11 @@
 #include <WebCore/Settings.h>
 #include <wtf/TZoneMallocInlines.h>
 
+#if OS(WINDOWS)
+// Glass M0: shlwapi.h defines StrCat as a macro, which breaks absl::StrCat in libwebrtc headers.
+#undef StrCat
+#endif
+
 WTF_IGNORE_WARNINGS_IN_THIRD_PARTY_CODE_BEGIN
 // See Bug 274508: Disable thread-safety-reference-return warnings in libwebrtc
 IGNORE_CLANG_WARNINGS_BEGIN("thread-safety-reference-return")

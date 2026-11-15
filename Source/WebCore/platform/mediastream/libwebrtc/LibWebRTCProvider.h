@@ -106,15 +106,15 @@ public:
 
     virtual void setLoggingLevel(WTFLogLevel);
 
-    WEBCORE_EXPORT virtual void setVP9HardwareSupportForTesting(std::optional<bool> value) { m_supportsVP9VTBForTesting = value; }
+    virtual void setVP9HardwareSupportForTesting(std::optional<bool> value) { m_supportsVP9VTBForTesting = value; }
     virtual bool isSupportingVP9HardwareDecoder() const { return m_supportsVP9VTBForTesting.value_or(false); }
 
     virtual bool isSupportingAV1HardwareDecoder() const { return false; }
 
-    NODELETE WEBCORE_EXPORT void disableEnumeratingAllNetworkInterfaces();
-    NODELETE WEBCORE_EXPORT void enableEnumeratingAllNetworkInterfaces();
+    NODELETE void disableEnumeratingAllNetworkInterfaces();
+    NODELETE void enableEnumeratingAllNetworkInterfaces();
     NODELETE bool isEnumeratingAllNetworkInterfacesEnabled() const;
-    NODELETE WEBCORE_EXPORT void enableEnumeratingVisibleNetworkInterfaces();
+    NODELETE void enableEnumeratingVisibleNetworkInterfaces();
     bool isEnumeratingVisibleNetworkInterfacesEnabled() const { return m_enableEnumeratingVisibleNetworkInterfaces; }
 
     class SuspendableSocketFactory : public webrtc::PacketSocketFactory {
