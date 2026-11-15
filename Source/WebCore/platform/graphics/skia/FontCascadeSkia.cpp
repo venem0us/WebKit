@@ -36,6 +36,18 @@ namespace WebCore {
 
 void FontCascade::drawGlyphs(GraphicsContext& graphicsContext, const FontBase& font, std::span<const GlyphBufferGlyph> glyphs, std::span<const GlyphBufferAdvance> advances, const FloatPoint& position, FontSmoothingMode smoothingMode)
 {
+#if OS(WINDOWS)
+    // Glass: subpixel (ClearType) text only where it lands on an opaque background: blended over transparency it shows
+    // coloured fringes once composited. So not in canvases (transparent unless the page fills them), nor on a layer
+    // that isn't opaque (GraphicsLayerWC turns shouldSmoothFonts off for those tiles); Skia itself draws grayscale
+    // inside a transparency layer. Page tiles drawn on the processor go through shared bitmaps, whose context is a
+    // "snapshot" one, so the purpose can't single them out.
+    auto& skiaContext = static_cast<GraphicsContextSkia&>(graphicsContext);
+    bool subpixel = smoothingMode == FontSmoothingMode::SubpixelAntialiased
+        || (smoothingMode == FontSmoothingMode::Auto && font.platformData().skFont().getEdging() == SkFont::Edging::kSubpixelAntiAlias);
+    if (subpixel && (skiaContext.renderingPurpose() == RenderingPurpose::Canvas || !graphicsContext.shouldSmoothFonts()))
+        smoothingMode = FontSmoothingMode::Antialiased;
+#endif
     auto blob = font.buildTextBlob(glyphs, advances, smoothingMode);
     if (!blob)
         return;

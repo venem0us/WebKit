@@ -28,9 +28,46 @@
 
 #if USE(SKIA)
 
+#if OS(WINDOWS)
+#include <cstdlib>
+#include <cstring>
+#include <windows.h>
+#endif
+
 namespace WebCore {
 
+#if OS(WINDOWS)
+// Glass: text as Windows draws it. Nothing told Skia about Windows' settings, so text was always drawn with grayscale
+// smoothing, softer than in Chrome or Edge, which use ClearType (subpixel smoothing) where Windows does. Follow
+// Windows: ClearType with the screen's subpixel order, grayscale when ClearType is off, none when font smoothing is
+// off. Subpixel text needs an opaque background; where there isn't one it is drawn grayscale (see
+// FontCascade::drawGlyphs). GLASS_FONT_SMOOTHING=cleartype|grayscale|none overrides Windows' setting (Glass's
+// Settings > Accessibility > Text smoothing sets it).
+FontRenderOptions::FontRenderOptions()
+{
+    BOOL smoothing = TRUE;
+    UINT type = FE_FONTSMOOTHINGCLEARTYPE;
+    UINT orientation = FE_FONTSMOOTHINGORIENTATIONRGB;
+    SystemParametersInfoW(SPI_GETFONTSMOOTHING, 0, &smoothing, 0);
+    SystemParametersInfoW(SPI_GETFONTSMOOTHINGTYPE, 0, &type, 0);
+    SystemParametersInfoW(SPI_GETFONTSMOOTHINGORIENTATION, 0, &orientation, 0);
+    auto antialias = !smoothing ? Antialias::None : type == FE_FONTSMOOTHINGCLEARTYPE ? Antialias::Subpixel : Antialias::Normal;
+    if (const char* value = std::getenv("GLASS_FONT_SMOOTHING"); value && *value) {
+        if (!std::strcmp(value, "cleartype"))
+            antialias = Antialias::Subpixel;
+        else if (!std::strcmp(value, "grayscale"))
+            antialias = Antialias::Normal;
+        else if (!std::strcmp(value, "none"))
+            antialias = Antialias::None;
+    }
+    setAntialias(antialias);
+    setSubpixelOrder(orientation == FE_FONTSMOOTHINGORIENTATIONBGR ? SubpixelOrder::HorizontalBGR : SubpixelOrder::HorizontalRGB);
+    setHinting(Hinting::Slight);   // as before
+    setFollowSystemSettings(true);
+}
+#else
 FontRenderOptions::FontRenderOptions() = default;
+#endif
 
 void FontRenderOptions::setHinting(std::optional<Hinting> hinting)
 {

@@ -134,6 +134,12 @@ ImageBufferShareableBitmapBackend::ImageBufferShareableBitmapBackend(const WebCo
     // However, ShareableBitmap does not have a notion of scale, so we must apply the device
     // scale factor to the context ourselves.
     m_context->applyDeviceScaleFactor(resolutionScale());
+#if OS(WINDOWS) && USE(SKIA)
+    // A canvas drawn here is transparent unless the page fills it: no subpixel (ClearType) text, which would show
+    // coloured fringes (FontCascade::drawGlyphs; this context's purpose is ShareableBitmap's, not the canvas's).
+    if (parameters.purpose == RenderingPurpose::Canvas)
+        m_context->setShouldSmoothFonts(false);
+#endif
 }
 
 ImageBufferShareableBitmapBackend::~ImageBufferShareableBitmapBackend() = default;

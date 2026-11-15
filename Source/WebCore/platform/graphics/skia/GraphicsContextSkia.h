@@ -51,6 +51,9 @@ class WEBCORE_EXPORT GraphicsContextSkia final : public GraphicsContext {
     friend class ImageBufferSkiaAcceleratedBackend;
 public:
     GraphicsContextSkia(SkCanvas&, RenderingMode, RenderingPurpose, CompletionHandler<void()>&& = nullptr);
+
+    // What this context draws for (Glass: subpixel text only for DOM, see FontCascade::drawGlyphs).
+    RenderingPurpose renderingPurpose() const { return m_renderingPurpose; }
     virtual ~GraphicsContextSkia();
 
     bool hasPlatformContext() const final;
