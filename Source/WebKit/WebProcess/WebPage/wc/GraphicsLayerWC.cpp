@@ -81,6 +81,11 @@ public:
             auto image = m_owner.createImageBuffer(dirtyRect.size(), deviceScaleFactor);
             auto& context = image->context();
             context.translate(-dirtyRect.x(), -dirtyRect.y());
+#if OS(WINDOWS)
+            // Subpixel (ClearType) text only on a layer that paints an opaque background (see FontCascade::drawGlyphs):
+            // over a transparent one it would show coloured fringes once composited.
+            context.setShouldSmoothFonts(m_owner.contentsOpaque());
+#endif
             m_owner.paintGraphicsLayerContents(context, dirtyRect);
             image->flushDrawingContextAsync();
             tileUpdate.backingStore.setImageBuffer(WTF::move(image));
