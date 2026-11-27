@@ -4118,6 +4118,11 @@ ExceptionOr<void> Document::open(Document* entryDocument)
         if (entryDocument != this)
             newURL.removeFragmentIdentifier();
         setURL(WTF::move(newURL));
+        // Requests made from the document now carry its new URL as their referrer, as after history.pushState():
+        // otherwise a frame the script writes into (an initial about:blank) keeps "about:blank" and its subframes
+        // and subresources are requested with no Referer at all.
+        if (RefPtr frame = this->frame())
+            frame->loader().setOutgoingReferrer(url());
         auto newCookieURL = entryDocument->cookieURL();
         if (entryDocument != this)
             newCookieURL.removeFragmentIdentifier();
