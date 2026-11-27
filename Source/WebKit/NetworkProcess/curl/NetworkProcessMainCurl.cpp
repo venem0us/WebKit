@@ -30,6 +30,10 @@
 #include "NetworkProcess.h"
 #include "NetworkSession.h"
 
+#if OS(WINDOWS)
+#include "GlassCrashDumps.h"
+#endif
+
 namespace WebKit {
 
 class NetworkProcessMainCurl final: public AuxiliaryProcessMainBase<NetworkProcess> {
@@ -47,6 +51,9 @@ public:
 
 int NetworkProcessMain(int argc, char** argv)
 {
+#if OS(WINDOWS)
+    installGlassCrashDumpWriter(L"network-process");
+#endif
     return AuxiliaryProcessMain<NetworkProcessMainCurl>(argc, argv);
 }
 

@@ -28,6 +28,7 @@
 
 #include "AuxiliaryProcessMain.h"
 #include "WebProcess.h"
+#include "GlassCrashDumps.h"
 #include <objbase.h>
 
 #if USE(SKIA_OPENTYPE_SVG)
@@ -57,6 +58,7 @@ int WebProcessMain(int argc, char** argv)
     // WebProcess uses DirectX
     HRESULT hr = ::CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     RELEASE_ASSERT(SUCCEEDED(hr));
+    installGlassCrashDumpWriter(L"web-process");
     return AuxiliaryProcessMain<WebProcessMainWin>(argc, argv);
 }
 
